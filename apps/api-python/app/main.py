@@ -34,6 +34,11 @@ if LLM_PROVIDER == "google":
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5.4")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "")
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -441,39 +446,85 @@ def fetch_risk_students(user: CurrentUser, class_code: str | None = None) -> lis
     return enriched
 
 
-def resolve_llm():
-    if not LANGCHAIN_AVAILABLE or not LLM_API_KEY:
+def get_provider_settings(provider: str) -> dict[str, str]:
+    if provider == "gemini":
+        return {
+            "api_key": GEMINI_API_KEY or LLM_API_KEY,
+            "model": GEMINI_MODEL or LLM_MODEL or "gemini-2.0-flash",
+            "base_url": "",
+        }
+    return {
+        "api_key": OPENAI_API_KEY or LLM_API_KEY,
+        "model": OPENAI_MODEL or LLM_MODEL or "gpt-5.4",
+        "base_url": OPENAI_BASE_URL or LLM_BASE_URL,
+    }
+
+
+def resolve_llm(provider: str):
+    if not LANGCHAIN_AVAILABLE:
         return None
-    if LLM_PROVIDER == "gemini":
-        return ChatGoogleGenerativeAI(model=LLM_MODEL, google_api_key=LLM_API_KEY, temperature=0)
-    kwargs: dict[str, Any] = {"model": LLM_MODEL, "api_key": LLM_API_KEY, "temperature": 0}
-    if LLM_BASE_URL:
-        kwargs["base_url"] = LLM_BASE_URL
+    settings = get_provider_settings(provider)
+    api_key = settings["api_key"]
+    if not api_key:
+        return None
+    if provider == "gemini":
+        return ChatGoogleGenerativeAI(model=settings["model"], google_api_key=api_key, temperature=0)
+    kwargs: dict[str, Any] = {"model": settings["model"], "api_key": api_key, "temperature": 0}
+    if settings["base_url"]:
+        kwargs["base_url"] = settings["base_url"]
     return ChatOpenAI(**kwargs)
 
 
+def provider_order() -> list[str]:
+    return ["gemini", "openai"] if LLM_PROVIDER == "gemini" else ["openai", "gemini"]
+
+
+def should_fallback(provider: str, exc: Exception) -> bool:
+    if provider != "gemini":
+        return False
+    message = str(exc).lower()
+    fallback_signals = [
+        "api key",
+        "invalid",
+        "permission",
+        "quota",
+        "rate limit",
+        "resource exhausted",
+        "unavailable",
+        "not found",
+        "unsupported",
+        "deadline exceeded",
+        "timed out",
+        "service unavailable",
+    ]
+    return any(signal in message for signal in fallback_signals)
+
+
 def llm_json(system_prompt: str, user_prompt: str) -> dict[str, Any] | None:
-    model = resolve_llm()
-    if not model:
-        return None
-    try:
-        response = model.invoke(
-            [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_prompt),
-            ]
-        )
-        text = getattr(response, "content", "")
-        if isinstance(text, list):
-            text = "".join(chunk.get("text", "") for chunk in text if isinstance(chunk, dict))
-        if not isinstance(text, str):
-            return None
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            return None
-        return json.loads(match.group(0))
-    except Exception:
-        return None
+    for index, provider in enumerate(provider_order()):
+        model = resolve_llm(provider)
+        if not model:
+            continue
+        try:
+            response = model.invoke(
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_prompt),
+                ]
+            )
+            text = getattr(response, "content", "")
+            if isinstance(text, list):
+                text = "".join(chunk.get("text", "") for chunk in text if isinstance(chunk, dict))
+            if not isinstance(text, str):
+                continue
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            if not match:
+                continue
+            return json.loads(match.group(0))
+        except Exception as exc:
+            if index == len(provider_order()) - 1 or not should_fallback(provider, exc):
+                continue
+    return None
 
 
 def extract_class_code_from_message(message: str, class_codes: list[str]) -> str | None:
@@ -1059,7 +1110,7 @@ def chat_to_data(payload: ChatPayload, user: CurrentUser = Depends(require_auth)
         "sqlPreview": result.get("sqlPreview"),
         "rows": result["rows"],
         "visualization": result["visualization"],
-        "llmEnabled": bool(resolve_llm()),
+        "llmEnabled": any(resolve_llm(provider) is not None for provider in provider_order()),
         "provider": LLM_PROVIDER,
     }
 

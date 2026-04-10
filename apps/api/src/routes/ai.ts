@@ -7,9 +7,35 @@ import { logger } from '../utils/logger.js';
 
 type ScopedQuery = { sql: string; params: Array<string | number> };
 type LlmSqlResult = { sql: string; explanation: string; model: string; provider: 'openai' | 'gemini' };
+type LlmAssistantResult = { answer: string; model: string; provider: 'openai' | 'gemini' };
+type LlmProvider = LlmSqlResult['provider'];
+type ProviderConfig = { apiKey?: string; model?: string };
+type ChatMode = 'auto' | 'data' | 'assistant';
 
 const MUTATION_KEYWORDS = /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|comment|copy|call)\b/i;
 const ALLOWED_FROM = /\b(from|join)\s+([a-z_][a-z0-9_]*)/gi;
+const DATA_INTENT_TERMS = [
+  'sql',
+  'truy vấn',
+  'liệt kê',
+  'danh sách',
+  'top',
+  'bao nhiêu',
+  'số lượng',
+  'thống kê',
+  'phổ điểm',
+  'biểu đồ',
+  'gpa',
+  'rủi ro',
+  'risk',
+  'sinh viên',
+  'mssv',
+  'lớp',
+  'môn',
+  'course',
+  'class',
+  'student',
+];
 
 function cleanSql(raw: string): string {
   return raw.replace(/```sql|```/gi, '').trim();
@@ -66,14 +92,38 @@ Ràng buộc bắt buộc:
 `;
 }
 
+function assistantPrompt(): string {
+  return `
+Bạn là trợ lý học vụ cho Cố vấn học tập (CVHT).
+Nhiệm vụ:
+- Trả lời ngắn gọn, dễ hành động, bằng tiếng Việt.
+- Có thể đưa checklist, kế hoạch can thiệp, mẫu tin nhắn nhắc học tập, mẹo cải thiện GPA.
+- Không bịa số liệu từ cơ sở dữ liệu. Nếu cần số liệu cụ thể, hãy nói rõ người dùng nên hỏi theo chế độ dữ liệu.
+- Tránh nội dung ngoài phạm vi học vụ.
+- Định dạng đầu ra ưu tiên:
+  1) 1 câu tóm tắt ngắn.
+  2) 3-5 gạch đầu dòng hành động cụ thể.
+  3) Nếu phù hợp, thêm phần "Mẫu tin nhắn" ngắn 1-2 câu.
+`;
+}
+
+function inferChatMode(message: string, requestedMode: ChatMode): Exclude<ChatMode, 'auto'> {
+  if (requestedMode === 'assistant' || requestedMode === 'data') {
+    return requestedMode;
+  }
+  const normalized = message.toLowerCase();
+  return DATA_INTENT_TERMS.some((term) => normalized.includes(term)) ? 'data' : 'assistant';
+}
+
 async function callOpenAiForSql(question: string): Promise<LlmSqlResult> {
   const apiKey = env.OPENAI_API_KEY || env.LLM_API_KEY;
   const model = env.OPENAI_MODEL || env.LLM_MODEL;
+  const baseUrl = (env.OPENAI_BASE_URL || env.LLM_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
   if (!apiKey) {
     throw new Error('MISSING_API_KEY');
   }
 
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+  const resp = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -196,12 +246,244 @@ async function callGeminiForSql(question: string): Promise<LlmSqlResult> {
   };
 }
 
+async function callOpenAiForAssistant(question: string): Promise<LlmAssistantResult> {
+  const apiKey = env.OPENAI_API_KEY || env.LLM_API_KEY;
+  const model = env.OPENAI_MODEL || env.LLM_MODEL;
+  const baseUrl = (env.OPENAI_BASE_URL || env.LLM_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+  if (!apiKey) {
+    throw new Error('MISSING_API_KEY');
+  }
+
+  const resp = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: assistantPrompt() },
+        { role: 'user', content: question },
+      ],
+    }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    logger.error({ status: resp.status, errText }, 'OpenAI assistant call failed');
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error('INVALID_API_KEY');
+    }
+    if (resp.status === 429) {
+      throw new Error('OPENAI_QUOTA_EXCEEDED');
+    }
+    throw new Error('OPENAI_API_ERROR');
+  }
+
+  const data = (await resp.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const content = data.choices?.[0]?.message?.content?.trim();
+  if (!content) {
+    throw new Error('OPENAI_EMPTY_RESPONSE');
+  }
+
+  return {
+    answer: content,
+    model,
+    provider: 'openai',
+  };
+}
+
+async function callGeminiForAssistant(question: string): Promise<LlmAssistantResult> {
+  const apiKey = env.GEMINI_API_KEY || env.LLM_API_KEY;
+  const model = env.GEMINI_MODEL || env.LLM_MODEL || 'gemini-2.0-flash';
+  if (!apiKey) {
+    throw new Error('MISSING_API_KEY');
+  }
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: assistantPrompt() }],
+      },
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: question }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.2,
+      },
+    }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    logger.error({ status: resp.status, errText }, 'Gemini assistant call failed');
+    if (resp.status === 503) {
+      throw new Error('LLM_TEMP_UNAVAILABLE');
+    }
+    if (resp.status === 404) {
+      throw new Error('LLM_MODEL_NOT_FOUND');
+    }
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error('INVALID_API_KEY');
+    }
+    if (resp.status === 429) {
+      throw new Error('LLM_QUOTA_EXCEEDED');
+    }
+    throw new Error('LLM_API_ERROR');
+  }
+
+  const data = (await resp.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  if (!content) {
+    throw new Error('LLM_EMPTY_RESPONSE');
+  }
+
+  return {
+    answer: content,
+    model,
+    provider: 'gemini',
+  };
+}
+
 async function callLlmForSql(question: string): Promise<LlmSqlResult> {
-  const provider = (env.LLM_PROVIDER || 'openai').toLowerCase();
-  if (provider === 'gemini' || provider === 'google') {
+  const preferredProvider = normalizeProvider(env.LLM_PROVIDER);
+  const providers: LlmProvider[] =
+    preferredProvider === 'gemini' ? ['gemini', 'openai'] : ['openai', 'gemini'];
+  let lastError: unknown;
+
+  for (let index = 0; index < providers.length; index += 1) {
+    const provider = providers[index];
+    if (!hasProviderConfig(provider)) {
+      continue;
+    }
+    try {
+      const result = await callProviderForSql(provider, question);
+      if (index > 0) {
+        logger.warn(
+          { provider, fallbackFrom: providers[0], model: result.model },
+          'LLM fallback provider succeeded',
+        );
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      const code = error instanceof Error ? error.message : 'LLM_API_ERROR';
+      if (!shouldFallbackToNextProvider(provider, code, index, providers)) {
+        throw error;
+      }
+      logger.warn({ provider, code, fallbackTo: providers[index + 1] }, 'LLM provider failed, trying fallback');
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('LLM_API_ERROR');
+}
+
+async function callLlmForAssistant(question: string): Promise<LlmAssistantResult> {
+  const preferredProvider = normalizeProvider(env.LLM_PROVIDER);
+  const providers: LlmProvider[] =
+    preferredProvider === 'gemini' ? ['gemini', 'openai'] : ['openai', 'gemini'];
+  let lastError: unknown;
+
+  for (let index = 0; index < providers.length; index += 1) {
+    const provider = providers[index];
+    if (!hasProviderConfig(provider)) {
+      continue;
+    }
+    try {
+      return await callProviderForAssistant(provider, question);
+    } catch (error) {
+      lastError = error;
+      const code = error instanceof Error ? error.message : 'LLM_API_ERROR';
+      if (!shouldFallbackToNextProvider(provider, code, index, providers)) {
+        throw error;
+      }
+      logger.warn({ provider, code, fallbackTo: providers[index + 1] }, 'Assistant provider failed, trying fallback');
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('LLM_API_ERROR');
+}
+
+function normalizeProvider(provider?: string): LlmProvider {
+  const normalized = provider?.toLowerCase();
+  if (normalized === 'gemini' || normalized === 'google') {
+    return 'gemini';
+  }
+  if (normalized === 'openai' || normalized === 'trollllm') {
+    return 'openai';
+  }
+  return 'openai';
+}
+
+function getProviderConfig(provider: LlmProvider): ProviderConfig {
+  if (provider === 'gemini') {
+    return {
+      apiKey: env.GEMINI_API_KEY || env.LLM_API_KEY,
+      model: env.GEMINI_MODEL || env.LLM_MODEL || 'gemini-2.0-flash',
+    };
+  }
+  return {
+    apiKey: env.OPENAI_API_KEY || env.LLM_API_KEY,
+    model: env.OPENAI_MODEL || env.LLM_MODEL,
+  };
+}
+
+function hasProviderConfig(provider: LlmProvider): boolean {
+  return Boolean(getProviderConfig(provider).apiKey);
+}
+
+function shouldFallbackToNextProvider(
+  provider: LlmProvider,
+  code: string,
+  index: number,
+  providers: LlmProvider[],
+): boolean {
+  if (provider !== 'gemini') {
+    return false;
+  }
+  if (index >= providers.length - 1) {
+    return false;
+  }
+  if (!hasProviderConfig(providers[index + 1])) {
+    return false;
+  }
+  return new Set([
+    'MISSING_API_KEY',
+    'INVALID_API_KEY',
+    'LLM_QUOTA_EXCEEDED',
+    'LLM_TEMP_UNAVAILABLE',
+    'LLM_MODEL_NOT_FOUND',
+    'LLM_API_ERROR',
+    'LLM_EMPTY_RESPONSE',
+  ]).has(code);
+}
+
+async function callProviderForSql(provider: LlmProvider, question: string): Promise<LlmSqlResult> {
+  if (provider === 'gemini') {
     return callGeminiForSql(question);
   }
   return callOpenAiForSql(question);
+}
+
+async function callProviderForAssistant(provider: LlmProvider, question: string): Promise<LlmAssistantResult> {
+  if (provider === 'gemini') {
+    return callGeminiForAssistant(question);
+  }
+  return callOpenAiForAssistant(question);
 }
 
 function scopedClassFilter(req: AuthRequest, classAlias = 'c'): ScopedQuery {
@@ -492,7 +774,13 @@ aiRouter.get('/anomalies/patterns', async (req: AuthRequest, res) => {
 });
 
 aiRouter.post('/chat-to-data', async (req: AuthRequest, res) => {
-  const body = z.object({ message: z.string().min(1) }).parse(req.body);
+  const body = z
+    .object({
+      message: z.string().min(1),
+      mode: z.enum(['auto', 'data', 'assistant']).optional().default('auto'),
+    })
+    .parse(req.body);
+  const resolvedMode = inferChatMode(body.message, body.mode);
   const scope = scopedClassFilter(req, 'c');
   const scopedDatasetSql = `
     SELECT
@@ -519,6 +807,61 @@ aiRouter.post('/chat-to-data', async (req: AuthRequest, res) => {
     LEFT JOIN terms t ON t.id = co.term_id
     WHERE ${scope.sql}
   `;
+
+  if (resolvedMode === 'assistant') {
+    let assistantResult: LlmAssistantResult;
+    try {
+      assistantResult = await callLlmForAssistant(body.message);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'LLM_API_ERROR';
+      if (msg === 'MISSING_API_KEY') {
+        res.status(503).json({
+          message: 'Thiếu API key LLM. Hãy cấu hình key tương ứng với provider rồi thử lại.',
+        });
+        return;
+      }
+      if (msg === 'INVALID_API_KEY') {
+        res.status(401).json({
+          message: 'API key LLM không hợp lệ hoặc đã hết hạn. Hãy đổi API key khác.',
+        });
+        return;
+      }
+      if (msg === 'OPENAI_QUOTA_EXCEEDED' || msg === 'LLM_QUOTA_EXCEEDED') {
+        res.status(429).json({
+          message: 'LLM API hết quota/billing. Hãy đổi API key khác hoặc nạp quota rồi thử lại.',
+        });
+        return;
+      }
+      if (msg === 'LLM_TEMP_UNAVAILABLE') {
+        res.status(503).json({
+          message: 'Gemini đang quá tải tạm thời (high demand). Hãy thử lại sau hoặc đổi model khác.',
+        });
+        return;
+      }
+      if (msg === 'LLM_MODEL_NOT_FOUND') {
+        res.status(422).json({
+          message: 'Model LLM không tồn tại hoặc không hỗ trợ endpoint này. Hãy đổi model khác.',
+        });
+        return;
+      }
+      res.status(502).json({
+        message: 'Lỗi khi gọi LLM API. Kiểm tra provider, API key, model hoặc mạng rồi thử lại.',
+      });
+      return;
+    }
+
+    res.json({
+      mode: 'assistant',
+      message: body.message,
+      answer: assistantResult.answer,
+      sqlPreview: null,
+      rows: [],
+      visualization: { type: 'text' },
+      llmEnabled: true,
+      provider: `${assistantResult.provider}:${assistantResult.model}`,
+    });
+    return;
+  }
 
   let llmResult: LlmSqlResult;
   try {
@@ -579,6 +922,7 @@ aiRouter.post('/chat-to-data', async (req: AuthRequest, res) => {
     await client.query('COMMIT');
 
     res.json({
+      mode: 'data',
       message: body.message,
       answer: llmResult.explanation || `Đã trả về ${queryResult.rows.length} dòng dữ liệu.`,
       sqlPreview: llmResult.sql,

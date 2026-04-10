@@ -85,6 +85,7 @@ type Pattern = {
 };
 
 type ChatResult = {
+  mode?: 'data' | 'assistant';
   message: string;
   answer: string;
   sqlPreview?: string | null;
@@ -277,6 +278,51 @@ function humanizeChatCell(value: unknown): string {
   return String(value ?? '');
 }
 
+type AnswerBlock =
+  | { type: 'paragraph'; text: string }
+  | { type: 'bullet'; items: string[] };
+
+function parseAnswerBlocks(answer: string): AnswerBlock[] {
+  const lines = answer.replace(/\r\n/g, '\n').split('\n').map((line) => line.trim());
+  const blocks: AnswerBlock[] = [];
+  let paragraphBuffer: string[] = [];
+  let bulletBuffer: string[] = [];
+
+  const flushParagraph = () => {
+    if (!paragraphBuffer.length) return;
+    blocks.push({ type: 'paragraph', text: paragraphBuffer.join(' ') });
+    paragraphBuffer = [];
+  };
+
+  const flushBullet = () => {
+    if (!bulletBuffer.length) return;
+    blocks.push({ type: 'bullet', items: [...bulletBuffer] });
+    bulletBuffer = [];
+  };
+
+  for (const line of lines) {
+    if (!line) {
+      flushParagraph();
+      flushBullet();
+      continue;
+    }
+
+    const bulletMatch = line.match(/^(?:[-*•]|\d+[\.)])\s+(.+)$/);
+    if (bulletMatch) {
+      flushParagraph();
+      bulletBuffer.push(bulletMatch[1]);
+      continue;
+    }
+
+    flushBullet();
+    paragraphBuffer.push(line);
+  }
+
+  flushParagraph();
+  flushBullet();
+  return blocks.length ? blocks : [{ type: 'paragraph', text: answer }];
+}
+
 function ChatResultPanel({ result, error, isPending }: { result?: ChatResult; error?: string; isPending?: boolean }) {
   if (isPending) {
     return <p className="muted">AI đang xử lý truy vấn của bạn...</p>;
@@ -287,18 +333,33 @@ function ChatResultPanel({ result, error, isPending }: { result?: ChatResult; er
   }
 
   if (!result) {
-    return <p className="muted">Hãy đặt câu hỏi về lớp, sinh viên, phổ điểm hoặc nhóm nguy cơ.</p>;
+    return <p className="muted">Bạn có thể hỏi dữ liệu học vụ hoặc xin tư vấn/kế hoạch can thiệp học tập.</p>;
   }
 
   const keys = result.rows.length > 0 ? Object.keys(result.rows[0]) : [];
+  const answerBlocks = parseAnswerBlocks(result.answer);
 
   return (
     <div className="chat-result">
       <div className="assistant-answer">
         <div className="eyebrow">Phản hồi AI</div>
-        <p>{result.answer}</p>
+        <div className="assistant-answer-content">
+          {answerBlocks.map((block, index) =>
+            block.type === 'paragraph' ? (
+              <p key={index}>{block.text}</p>
+            ) : (
+              <ul key={index} className="assistant-bullets">
+                {block.items.map((item, itemIndex) => (
+                  <li key={itemIndex}>{item}</li>
+                ))}
+              </ul>
+            ),
+          )}
+        </div>
         <div className="helper-line">
-          {result.llmEnabled ? `Mô hình đang dùng: ${result.provider}` : 'Nguồn dữ liệu: API /ai/chat-to-data'}
+          {result.llmEnabled
+            ? `Mô hình đang dùng: ${result.provider}${result.mode ? ` • Chế độ: ${result.mode}` : ''}`
+            : 'Nguồn dữ liệu: API /ai/chat-to-data'}
         </div>
       </div>
 
@@ -411,6 +472,7 @@ function DashboardPage() {
         : 'Top 5 sinh viên có GPA cao nhất theo toàn bộ dữ liệu',
       'Vẽ biểu đồ phổ điểm theo một học phần đang mở',
       'Cho tôi tổng quan rủi ro học vụ hiện tại',
+      'Gợi ý kế hoạch can thiệp 2 tuần cho sinh viên có GPA thấp',
     ];
   }, [classes.data]);
 
@@ -528,7 +590,7 @@ function DashboardPage() {
           <textarea
             value={chatPrompt}
             onChange={(e) => setChatPrompt(e.target.value)}
-            placeholder="Hỏi bằng tiếng Việt: liệt kê sinh viên có nguy cơ rớt môn, top GPA, vẽ phổ điểm..."
+            placeholder="Hỏi dữ liệu hoặc xin tư vấn học vụ: top GPA, phổ điểm, kế hoạch can thiệp, mẫu nhắn nhắc học..."
           />
           <div className="prompt-strip">
             {prompts.map((prompt) => (

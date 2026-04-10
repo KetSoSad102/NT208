@@ -76,9 +76,15 @@ Neu can bat AI planner/summarizer bang API key rieng, them vao `.env`:
 LLM_PROVIDER=openai
 LLM_API_KEY=your_api_key
 LLM_MODEL=gpt-4o-mini
+LLM_BASE_URL=https://api.openai.com/v1
 # Hoac neu dung Gemini:
 # LLM_PROVIDER=gemini
 # LLM_MODEL=gemini-1.5-flash
+# Hoac neu dung TrollLLM (OpenAI-compatible):
+# LLM_PROVIDER=trollllm
+# LLM_API_KEY=your_trollllm_key
+# LLM_BASE_URL=https://chat.trollllm.xyz/v1
+# LLM_MODEL=gpt-5.4
 ```
 
 ## 6) Chay local khong Docker
@@ -162,7 +168,7 @@ npm run dev:web
   - GET /ai/predictive/matrix
   - GET /ai/anomalies/briefs
   - GET /ai/anomalies/patterns
-  - POST /ai/chat-to-data
+  - POST /ai/chat-to-data (ho tro `mode`: `auto` | `data` | `assistant`)
 - Admin
   - POST /admin/import-jobs/trigger
 - Health

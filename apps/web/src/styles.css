@@ -289,6 +289,27 @@ textarea {
   border: 1px solid rgba(19, 34, 56, 0.1);
 }
 
+.assistant-answer-content {
+  display: grid;
+  gap: 8px;
+}
+
+.assistant-answer-content p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.assistant-bullets {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+.assistant-bullets li {
+  line-height: 1.45;
+}
+
 .brief-card,
 .pattern-item,
 .notice-card,
