@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": "./src",
+    "paths": {
+      "@cvht/shared": ["../../../packages/shared/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

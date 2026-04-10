@@ -1,0 +1,30 @@
+{
+  "name": "cvht-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:*",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:worker": "npm run dev -w apps/worker",
+    "dev:web": "npm run dev -w apps/web",
+    "lint": "npm-run-all lint:*",
+    "lint:api": "npm run lint -w apps/api",
+    "lint:worker": "npm run lint -w apps/worker",
+    "lint:web": "npm run lint -w apps/web",
+    "format": "prettier --write .",
+    "test": "npm-run-all test:*",
+    "test:api": "npm run test -w apps/api",
+    "test:worker": "npm run test -w apps/worker",
+    "migrate": "npm run migrate -w apps/api",
+    "seed": "npm run seed -w apps/api"
+    ,
+    "db:reset": "npm run migrate -w apps/api && npm run seed -w apps/api"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5",
+    "prettier": "^3.3.3"
+  }
+}

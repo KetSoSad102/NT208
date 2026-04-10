@@ -1,0 +1,36 @@
+{
+  "sourceName": "mock_daa",
+  "generatedAt": "2026-03-26T00:00:00Z",
+  "results": [
+    {
+      "mssv": "SV001",
+      "fullName": "Sinh vien 1",
+      "classCode": "CNTT-K18A",
+      "termCode": "2025-2",
+      "courseCode": "DBI201",
+      "courseName": "Co so du lieu",
+      "credits": 3,
+      "finalScore": 3.2
+    },
+    {
+      "mssv": "SV031",
+      "fullName": "Sinh vien 31",
+      "classCode": "CNTT-K18A",
+      "termCode": "2025-2",
+      "courseCode": "SE201",
+      "courseName": "Ky thuat phan mem",
+      "credits": 3,
+      "finalScore": 7.1
+    },
+    {
+      "mssv": "SV032",
+      "fullName": "Sinh vien 32",
+      "classCode": "CNTT-K18B",
+      "termCode": "2025-2",
+      "courseCode": "NET201",
+      "courseName": "Mang may tinh",
+      "credits": 3,
+      "finalScore": 5.2
+    }
+  ]
+}
