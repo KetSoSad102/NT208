@@ -28,13 +28,37 @@ const DATA_INTENT_TERMS = [
   'gpa',
   'rủi ro',
   'risk',
-  'sinh viên',
   'mssv',
-  'lớp',
-  'môn',
   'course',
   'class',
   'student',
+];
+
+const ASSISTANT_INTENT_PATTERNS = [
+  /tôi cần làm gì/u,
+  /toi can lam gi/u,
+  /nên làm gì/u,
+  /nen lam gi/u,
+  /phải làm gì/u,
+  /phai lam gi/u,
+  /gợi ý/u,
+  /goi y/u,
+  /kế hoạch/u,
+  /ke hoach/u,
+  /can thiệp/u,
+  /can thiep/u,
+  /tư vấn/u,
+  /tu van/u,
+  /hướng dẫn/u,
+  /huong dan/u,
+  /xử lý thế nào/u,
+  /xu ly the nao/u,
+  /nói với/u,
+  /noi voi/u,
+  /nhắn/u,
+  /nhan/u,
+  /mẫu tin nhắn/u,
+  /mau tin nhan/u,
 ];
 
 function cleanSql(raw: string): string {
@@ -89,6 +113,35 @@ Ràng buộc bắt buộc:
 - BẮT BUỘC có LIMIT <= 200.
 - CHỈ được truy vấn duy nhất từ bảng ảo "scoped_data".
 - Không truy cập bảng nào khác.
+
+Schema bảng ảo scoped_data:
+- student_id: uuid
+- mssv: text
+- full_name: text
+- current_gpa: number
+- class_code: text
+- class_name: text
+- advisor_user_id: uuid
+- term_code: text | null
+- course_code: text | null
+- course_name: text | null
+- attempt_no: number | null
+- midterm_score: number | null
+- final_score: number | null
+- passed: boolean | null
+- is_retake: boolean | null
+- delay_risk_score: number | null
+- risk_band: text | null  -- low | medium | high | critical
+- quadrant: text | null
+- recommended_action: text | null
+
+Quy ước ánh xạ ngôn ngữ tự nhiên:
+- "rớt môn", "không đạt", "trượt" => passed = false
+- "học lại" => is_retake = true
+- "nguy cơ học vụ cao" => risk_band IN ('high', 'critical') hoặc delay_risk_score >= 55
+- "nguy cấp" => risk_band = 'critical' hoặc delay_risk_score >= 75
+- "lớp ATTT-K18A" => class_code = 'ATTT-K18A'
+- Chỉ dùng tên cột thật ở trên, KHÔNG tự bịa cột tiếng Việt như lop, nguy_co_hoc_vu, canh_bao_hoc_vu.
 `;
 }
 
@@ -112,6 +165,9 @@ function inferChatMode(message: string, requestedMode: ChatMode): Exclude<ChatMo
     return requestedMode;
   }
   const normalized = message.toLowerCase();
+  if (ASSISTANT_INTENT_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return 'assistant';
+  }
   return DATA_INTENT_TERMS.some((term) => normalized.includes(term)) ? 'data' : 'assistant';
 }
 
@@ -123,22 +179,34 @@ async function callOpenAiForSql(question: string): Promise<LlmSqlResult> {
     throw new Error('MISSING_API_KEY');
   }
 
-  const resp = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: llmPrompt() },
-        { role: 'user', content: question },
-      ],
-    }),
+  const requestPayload = (useJsonResponseFormat: boolean) => ({
+    model,
+    temperature: 0,
+    ...(useJsonResponseFormat ? { response_format: { type: 'json_object' as const } } : {}),
+    messages: [
+      { role: 'system' as const, content: llmPrompt() },
+      { role: 'user' as const, content: question },
+    ],
   });
+
+  const sendRequest = (useJsonResponseFormat: boolean) =>
+    fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestPayload(useJsonResponseFormat)),
+    });
+
+  let resp = await sendRequest(true);
+  if (!resp.ok && resp.status >= 500) {
+    logger.warn(
+      { status: resp.status, providerBaseUrl: baseUrl },
+      'OpenAI-compatible provider failed with response_format=json_object, retrying without structured response hint',
+    );
+    resp = await sendRequest(false);
+  }
 
   if (!resp.ok) {
     const errText = await resp.text();
@@ -546,7 +614,7 @@ function buildStudentsRiskQuery(req: AuthRequest, classCode?: string): ScopedQue
       COALESCE(lr.delay_risk_score, 15) AS "delayRiskScore",
       COALESCE(lr.risk_band, 'low') AS "riskBand",
       COALESCE(lr.quadrant, 'safe_zone') AS quadrant,
-      COALESCE(lr.recommended_action, 'Theo doi dinh ky') AS "recommendedAction"
+      COALESCE(lr.recommended_action, 'Theo dõi định kỳ') AS "recommendedAction"
     FROM agg a
     LEFT JOIN latest_risk lr ON lr.student_id = a.student_id
     ORDER BY "delayRiskScore" DESC, a.mssv
@@ -686,7 +754,7 @@ aiRouter.get('/anomalies/briefs', async (req: AuthRequest, res) => {
     `
       SELECT
         c.class_code AS "classCode",
-        COALESCE(ab.summary, 'Lop on dinh') AS summary,
+        COALESCE(ab.summary, 'Lớp ổn định') AS summary,
         COALESCE(ab.priority, 'normal') AS priority,
         COUNT(DISTINCT s.id)::text AS "studentCount",
         SUM(CASE WHEN e.passed = false THEN 1 ELSE 0 END)::text AS "failedNow",
@@ -767,7 +835,7 @@ aiRouter.get('/anomalies/patterns', async (req: AuthRequest, res) => {
         consequentName: null,
         supportCount: fail,
         confidence,
-        message: `${r.courseName} co ti le khong dat ${confidence}% (${fail}/${total})`,
+        message: `${r.courseName} có tỉ lệ không đạt ${confidence}% (${fail}/${total})`,
       };
     }),
   );
@@ -783,6 +851,16 @@ aiRouter.post('/chat-to-data', async (req: AuthRequest, res) => {
   const resolvedMode = inferChatMode(body.message, body.mode);
   const scope = scopedClassFilter(req, 'c');
   const scopedDatasetSql = `
+    WITH latest_risk AS (
+      SELECT DISTINCT ON (student_id)
+        student_id,
+        delay_risk_score,
+        risk_band,
+        quadrant,
+        recommended_action
+      FROM risk_snapshots
+      ORDER BY student_id, created_at DESC
+    )
     SELECT
       s.id AS student_id,
       s.mssv,
@@ -798,13 +876,18 @@ aiRouter.post('/chat-to-data', async (req: AuthRequest, res) => {
       e.midterm_score::float8 AS midterm_score,
       e.final_score::float8 AS final_score,
       e.passed,
-      e.is_retake
+      e.is_retake,
+      lr.delay_risk_score::float8 AS delay_risk_score,
+      lr.risk_band,
+      lr.quadrant,
+      lr.recommended_action
     FROM students s
     JOIN classes c ON c.id = s.class_id
     LEFT JOIN enrollments e ON e.student_id = s.id
     LEFT JOIN course_offerings co ON co.id = e.course_offering_id
     LEFT JOIN courses cr ON cr.id = co.course_id
     LEFT JOIN terms t ON t.id = co.term_id
+    LEFT JOIN latest_risk lr ON lr.student_id = s.id
     WHERE ${scope.sql}
   `;
 

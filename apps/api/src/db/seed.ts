@@ -36,6 +36,14 @@ function riskQuadrant(completionRatio: number, gpa: number): string {
   return 'safe_zone';
 }
 
+function seededPerformanceTier(mssv: string): 'critical' | 'high' | 'medium' | 'normal' {
+  const suffix = Number(mssv.slice(-2));
+  if (suffix === 1) return 'critical';
+  if (suffix >= 2 && suffix <= 4) return 'high';
+  if (suffix >= 5 && suffix <= 8) return 'medium';
+  return 'normal';
+}
+
 async function run() {
   const client = await pool.connect();
   try {
@@ -65,7 +73,7 @@ async function run() {
     const dean = await client.query<{ id: string }>(
       `
         INSERT INTO users (username, password_hash, role, full_name, email)
-        VALUES ('dean_admin', $1, 'DEAN_ADMIN', 'Dean Admin', 'dean@cvht.local')
+        VALUES ('dean_admin', $1, 'DEAN_ADMIN', 'Quản trị khoa', 'dean@cvht.local')
         RETURNING id
       `,
       [adminHash],
@@ -79,19 +87,19 @@ async function run() {
           VALUES ($1, $2, 'ADVISOR', $3, $4)
           RETURNING id
         `,
-        [`advisor_${i}`, advisorHash, `Co van ${i}`, `advisor${i}@cvht.local`],
+        [`advisor_${i}`, advisorHash, `Cố vấn ${i}`, `advisor${i}@cvht.local`],
       );
       advisorUsers.push({ id: rs.rows[0].id, username: `advisor_${i}` });
     }
 
     const classSpecs = [
-      { code: 'ATTT-K18A', name: 'An toan thong tin K18A', advisor: 0 },
-      { code: 'ATTT-K18B', name: 'An toan thong tin K18B', advisor: 0 },
-      { code: 'ATTT-K18C', name: 'An toan thong tin K18C', advisor: 1 },
-      { code: 'ATTT-K18D', name: 'An toan thong tin K18D', advisor: 1 },
-      { code: 'ATTT-K18E', name: 'An toan thong tin K18E', advisor: 2 },
-      { code: 'ATTT-K18F', name: 'An toan thong tin K18F', advisor: 2 },
-      { code: 'ATTT-K18G', name: 'An toan thong tin K18G', advisor: 3 },
+      { code: 'ATTT-K18A', name: 'An toàn thông tin K18A', advisor: 0 },
+      { code: 'ATTT-K18B', name: 'An toàn thông tin K18B', advisor: 0 },
+      { code: 'ATTT-K18C', name: 'An toàn thông tin K18C', advisor: 1 },
+      { code: 'ATTT-K18D', name: 'An toàn thông tin K18D', advisor: 1 },
+      { code: 'ATTT-K18E', name: 'An toàn thông tin K18E', advisor: 2 },
+      { code: 'ATTT-K18F', name: 'An toàn thông tin K18F', advisor: 2 },
+      { code: 'ATTT-K18G', name: 'An toàn thông tin K18G', advisor: 3 },
     ];
 
     for (const spec of classSpecs) {
@@ -107,32 +115,32 @@ async function run() {
     await client.query(`
       INSERT INTO terms (term_code, term_name, start_date, end_date)
       VALUES
-        ('2024-1', 'Hoc ky 1 - Nam hoc 2024-2025', '2024-09-01', '2025-01-15'),
-        ('2024-2', 'Hoc ky 2 - Nam hoc 2024-2025', '2025-02-01', '2025-06-15'),
-        ('2024-3', 'Hoc ky 3 - Nam hoc 2024-2025', '2025-07-01', '2025-08-30')
+        ('2024-1', 'Học kỳ 1 - Năm học 2024-2025', '2024-09-01', '2025-01-15'),
+        ('2024-2', 'Học kỳ 2 - Năm học 2024-2025', '2025-02-01', '2025-06-15'),
+        ('2024-3', 'Học kỳ 3 - Năm học 2024-2025', '2025-07-01', '2025-08-30')
     `);
 
     const courses = [
-      { code: 'ENG01', name: 'Anh van 1', credits: 3, term: '2024-1' },
-      { code: 'IT001', name: 'Nhap mon lap trinh', credits: 3, term: '2024-1' },
-      { code: 'MA003', name: 'Dai so tuyen tinh', credits: 3, term: '2024-1' },
-      { code: 'MA006', name: 'Giai tich', credits: 3, term: '2024-1' },
-      { code: 'NT015', name: 'Gioi thieu nganh An toan Thong tin', credits: 2, term: '2024-1' },
-      { code: 'PH002', name: 'Nhap mon mach so', credits: 3, term: '2024-1' },
-      { code: 'SS004', name: 'Ky nang nghe nghiep', credits: 2, term: '2024-1' },
-      { code: 'IT003', name: 'Cau truc du lieu va giai thuat', credits: 3, term: '2024-2' },
-      { code: 'IT005', name: 'Nhap mon mang may tinh', credits: 3, term: '2024-2' },
-      { code: 'IT006', name: 'Kien truc may tinh', credits: 3, term: '2024-2' },
-      { code: 'MA004', name: 'Cau truc roi rac', credits: 3, term: '2024-2' },
-      { code: 'MA005', name: 'Xac suat thong ke', credits: 3, term: '2024-2' },
-      { code: 'SS003', name: 'Tu tuong Ho Chi Minh', credits: 2, term: '2024-2' },
-      { code: 'SS006', name: 'Phap luat dai cuong', credits: 2, term: '2024-2' },
-      { code: 'IT002', name: 'Lap trinh huong doi tuong', credits: 3, term: '2024-3' },
-      { code: 'IT004', name: 'Co so du lieu', credits: 3, term: '2024-3' },
-      { code: 'IT007', name: 'He dieu hanh', credits: 3, term: '2024-3' },
-      { code: 'NT209', name: 'Lap trinh he thong', credits: 3, term: '2024-3' },
-      { code: 'NT219', name: 'Mat ma hoc', credits: 3, term: '2024-3' },
-      { code: 'SS007', name: 'Triet hoc Mac - Lenin', credits: 2, term: '2024-3' },
+      { code: 'ENG01', name: 'Anh văn 1', credits: 3, term: '2024-1' },
+      { code: 'IT001', name: 'Nhập môn lập trình', credits: 3, term: '2024-1' },
+      { code: 'MA003', name: 'Đại số tuyến tính', credits: 3, term: '2024-1' },
+      { code: 'MA006', name: 'Giải tích', credits: 3, term: '2024-1' },
+      { code: 'NT015', name: 'Giới thiệu ngành An toàn thông tin', credits: 2, term: '2024-1' },
+      { code: 'PH002', name: 'Nhập môn mạch số', credits: 3, term: '2024-1' },
+      { code: 'SS004', name: 'Kỹ năng nghề nghiệp', credits: 2, term: '2024-1' },
+      { code: 'IT003', name: 'Cấu trúc dữ liệu và giải thuật', credits: 3, term: '2024-2' },
+      { code: 'IT005', name: 'Nhập môn mạng máy tính', credits: 3, term: '2024-2' },
+      { code: 'IT006', name: 'Kiến trúc máy tính', credits: 3, term: '2024-2' },
+      { code: 'MA004', name: 'Cấu trúc rời rạc', credits: 3, term: '2024-2' },
+      { code: 'MA005', name: 'Xác suất thống kê', credits: 3, term: '2024-2' },
+      { code: 'SS003', name: 'Tư tưởng Hồ Chí Minh', credits: 2, term: '2024-2' },
+      { code: 'SS006', name: 'Pháp luật đại cương', credits: 2, term: '2024-2' },
+      { code: 'IT002', name: 'Lập trình hướng đối tượng', credits: 3, term: '2024-3' },
+      { code: 'IT004', name: 'Cơ sở dữ liệu', credits: 3, term: '2024-3' },
+      { code: 'IT007', name: 'Hệ điều hành', credits: 3, term: '2024-3' },
+      { code: 'NT209', name: 'Lập trình hệ thống', credits: 3, term: '2024-3' },
+      { code: 'NT219', name: 'Mật mã học', credits: 3, term: '2024-3' },
+      { code: 'SS007', name: 'Triết học Mác - Lênin', credits: 2, term: '2024-3' },
     ];
 
     await client.query(
@@ -147,9 +155,9 @@ async function run() {
       'SELECT id, class_code FROM classes ORDER BY class_code',
     );
 
-    const lastNames = ['Nguyen', 'Tran', 'Le', 'Pham', 'Hoang', 'Phan', 'Vu', 'Dang', 'Bui', 'Do'];
-    const middleNames = ['Minh', 'Ngoc', 'Thanh', 'Duc', 'Thu', 'Quang', 'Anh', 'Gia', 'Bao', 'Hai'];
-    const firstNames = ['An', 'Binh', 'Chi', 'Dung', 'Giang', 'Huy', 'Khanh', 'Linh', 'Nam', 'Phuong'];
+    const lastNames = ['Nguyễn', 'Trần', 'Lê', 'Phạm', 'Hoàng', 'Phan', 'Vũ', 'Đặng', 'Bùi', 'Đỗ'];
+    const middleNames = ['Minh', 'Ngọc', 'Thanh', 'Đức', 'Thu', 'Quang', 'Anh', 'Gia', 'Bảo', 'Hải'];
+    const firstNames = ['An', 'Bình', 'Chi', 'Dũng', 'Giang', 'Huy', 'Khánh', 'Linh', 'Nam', 'Phương'];
 
     let serial = 1;
     for (const classRow of classRows.rows) {
@@ -224,15 +232,49 @@ async function run() {
 
     for (const student of students.rows) {
       const items = offeringByClass.get(student.class_id) ?? [];
+      const performanceTier = seededPerformanceTier(student.mssv);
       for (const item of items) {
         const ability = 5.2 + (hashString(student.mssv) % 38) / 10;
         const noise = ((hashString(`${student.mssv}-${item.course_code}`) % 21) - 10) / 10;
         const termAdjust = item.term_code === '2024-3' ? -0.15 : item.term_code === '2024-2' ? 0.1 : 0;
         const difficult = courseDifficulty[item.course_code] ?? 0;
+        const tierPenalty =
+          performanceTier === 'critical'
+            ? 3.4
+            : performanceTier === 'high'
+              ? 2.2
+              : performanceTier === 'medium'
+                ? 0.9
+                : 0;
+        const hardCoursePenalty =
+          performanceTier !== 'normal' && ['IT007', 'NT209', 'NT219', 'MA006', 'MA005'].includes(item.course_code)
+            ? performanceTier === 'critical'
+              ? 0.8
+              : performanceTier === 'high'
+                ? 0.5
+                : 0.2
+            : 0;
 
-        const finalScore = Number(clamp(ability + difficult + termAdjust + noise, 2.0, 9.8).toFixed(1));
-        const midterm = Number(clamp(finalScore + ((hashString(`${student.mssv}-mid`) % 7) - 3) / 10, 2.0, 9.8).toFixed(1));
-        const attemptNo = hashString(`${student.mssv}-${item.course_code}`) % 12 === 0 ? 2 : 1;
+        const finalScore = Number(
+          clamp(ability + difficult + termAdjust + noise - tierPenalty - hardCoursePenalty, 2.0, 9.8).toFixed(1),
+        );
+        const midterm = Number(
+          clamp(finalScore + ((hashString(`${student.mssv}-mid`) % 7) - 3) / 10 - tierPenalty * 0.15, 2.0, 9.8).toFixed(
+            1,
+          ),
+        );
+        const attemptNo =
+          performanceTier === 'critical'
+            ? hashString(`${student.mssv}-${item.course_code}`) % 3 === 0
+              ? 2
+              : 1
+            : performanceTier === 'high'
+              ? hashString(`${student.mssv}-${item.course_code}`) % 5 === 0
+                ? 2
+                : 1
+              : hashString(`${student.mssv}-${item.course_code}`) % 12 === 0
+                ? 2
+                : 1;
 
         await client.query(
           `
@@ -318,12 +360,12 @@ async function run() {
       const quadrant = riskQuadrant(completionRatio, gpa);
       const recommendation =
         band === 'critical'
-          ? 'Hen gap trong 7 ngay, lap ke hoach hoc lai va theo doi hang tuan'
+          ? 'Hẹn gặp trong 7 ngày, lập kế hoạch học lại và theo dõi hằng tuần'
           : band === 'high'
-            ? 'Hen gap trong 14 ngay, bo sung de cuong on tap va nhac tien do'
+            ? 'Hẹn gặp trong 14 ngày, bổ sung đề cương ôn tập và nhắc tiến độ'
             : band === 'medium'
-              ? 'Theo doi dinh ky moi 3 tuan, uu tien cac mon nen tang'
-              : 'Duy tri on dinh va theo doi hoc tap dinh ky';
+              ? 'Theo dõi định kỳ mỗi 3 tuần, ưu tiên các môn nền tảng'
+              : 'Duy trì ổn định và theo dõi học tập định kỳ';
 
       await client.query(
         `
@@ -346,7 +388,7 @@ async function run() {
             INSERT INTO alerts (student_id, alert_type, severity, message, source)
             VALUES ($1, 'DELAY_RISK', $2, $3, 'SEED')
           `,
-          [row.student_id, band === 'critical' ? 'critical' : 'high', `Sinh vien ${row.mssv} co nguy co cham tien do`],
+          [row.student_id, band === 'critical' ? 'critical' : 'high', `Sinh viên ${row.mssv} có nguy cơ chậm tiến độ`],
         );
       }
     }
@@ -378,8 +420,8 @@ async function run() {
         `,
         [
           row.class_id,
-          `Ban tin lop ${row.class_code}`,
-          `Lop ${row.class_code} co ${highRisk} sinh vien rui ro cao/nguy cap, GPA trung binh ${row.avg_score}`,
+          `Bản tin lớp ${row.class_code}`,
+          `Lớp ${row.class_code} có ${highRisk} sinh viên rủi ro cao/nguy cấp, GPA trung bình ${row.avg_score}`,
           priority,
         ],
       );
@@ -387,7 +429,7 @@ async function run() {
 
     await client.query(`
       INSERT INTO advisory_notes (student_id, advisor_user_id, note)
-      SELECT s.id, c.advisor_user_id, 'Theo doi tien do hoc tap va uu tien mon nen tang trong 2 tuan toi'
+      SELECT s.id, c.advisor_user_id, 'Theo dõi tiến độ học tập và ưu tiên môn nền tảng trong 2 tuần tới'
       FROM students s
       JOIN classes c ON c.id = s.class_id
       ORDER BY s.mssv

@@ -1,5 +1,9 @@
 @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap');
 
+html {
+  font-size: 80%;
+}
+
 :root {
   font-family: 'Be Vietnam Pro', 'Noto Sans', 'Segoe UI', Roboto, Arial, sans-serif;
   color: #132238;
@@ -338,9 +342,48 @@ textarea {
   align-items: center;
 }
 
+.axis-row {
+  color: #4e6278;
+  font-size: 0.88rem;
+}
+
 .matrix-shell {
   display: grid;
   gap: 12px;
+}
+
+.matrix-toolbar,
+.matrix-zoom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.matrix-toolbar {
+  justify-content: space-between;
+}
+
+.matrix-zoom span {
+  min-width: 54px;
+  text-align: center;
+  font-weight: 700;
+  color: #16314d;
+}
+
+.matrix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #4e6278;
+  font-size: 0.9rem;
+}
+
+.matrix-legend span {
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(19, 34, 56, 0.08);
 }
 
 .matrix-grid {
@@ -362,12 +405,36 @@ textarea {
   min-height: 360px;
   border-radius: 24px;
   border: 1px solid rgba(19, 34, 56, 0.12);
+  overflow: auto;
+  background: rgba(245, 250, 254, 0.45);
+}
+
+.matrix-canvas {
+  position: relative;
+  min-width: 100%;
+  min-height: 360px;
+  transform-origin: top left;
   background:
     linear-gradient(rgba(19, 34, 56, 0.05) 1px, transparent 1px),
     linear-gradient(90deg, rgba(19, 34, 56, 0.05) 1px, transparent 1px),
     linear-gradient(145deg, rgba(255, 255, 255, 0.7), rgba(217, 236, 246, 0.85));
   background-size: 25% 25%, 25% 25%, auto;
   overflow: hidden;
+  border-radius: 24px;
+}
+
+.matrix-y-scale {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  z-index: 1;
+  pointer-events: none;
+  color: #5d7088;
+  font-size: 0.76rem;
 }
 
 .matrix-plot::before,
@@ -409,10 +476,21 @@ textarea {
   font-size: 0.72rem;
   font-weight: 700;
   color: #233955;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(19, 34, 56, 0.08);
+  border-radius: 999px;
+  padding: 2px 6px;
+  box-shadow: 0 6px 18px rgba(20, 45, 79, 0.1);
 }
 
 .matrix-point.blinking {
   animation: pulse 1.3s infinite;
+}
+
+.matrix-footnote {
+  color: #4e6278;
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 .bar-chart,

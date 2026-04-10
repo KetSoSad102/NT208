@@ -112,6 +112,34 @@ function formatScore(value: unknown, digits = 2, fallback = '--'): string {
   return n.toFixed(digits);
 }
 
+function inferPromptMode(message: string): 'data' | 'assistant' {
+  const normalized = message.toLowerCase().trim();
+  const assistantPatterns = [
+    /tôi cần làm gì/u,
+    /toi can lam gi/u,
+    /nên làm gì/u,
+    /nen lam gi/u,
+    /phải làm gì/u,
+    /phai lam gi/u,
+    /gợi ý/u,
+    /goi y/u,
+    /kế hoạch/u,
+    /ke hoach/u,
+    /can thiệp/u,
+    /can thiep/u,
+    /tư vấn/u,
+    /tu van/u,
+    /hướng dẫn/u,
+    /huong dan/u,
+    /xử lý thế nào/u,
+    /xu ly the nao/u,
+    /mẫu tin nhắn/u,
+    /mau tin nhan/u,
+  ];
+
+  return assistantPatterns.some((pattern) => pattern.test(normalized)) ? 'assistant' : 'data';
+}
+
 function LoginPage() {
   const navigate = useNavigate();
   const [username, setUsername] = useState('advisor_1');
@@ -197,9 +225,74 @@ function MiniTrend({ items }: { items: Array<{ termCode: string; gpa: number }> 
 
 function MatrixChart({ matrix }: { matrix?: MatrixResponse }) {
   if (!matrix) return <p className="muted">Đang tải ma trận rủi ro...</p>;
+  const [zoom, setZoom] = useState(1);
+  const zoomPercent = Math.round(zoom * 100);
+  const baseHeight = 360;
+  const canvasScale = zoom < 1 ? zoom : 1;
+  const canvasSizeMultiplier = zoom > 1 ? zoom : 1;
+
+  const occupiedSlots = new Map<string, number>();
+  const plottedPoints = matrix.points.map((point) => {
+    const normalizedX = Math.max(0, Math.min(point.x, 100));
+    const normalizedY = Math.max(0, Math.min(point.y * 10, 100));
+    const bucketX = Math.round(normalizedX / 4);
+    const bucketY = Math.round(normalizedY / 6);
+    const bucketKey = `${bucketX}:${bucketY}`;
+    const collisions = occupiedSlots.get(bucketKey) ?? 0;
+    occupiedSlots.set(bucketKey, collisions + 1);
+
+    const offsetX = ((collisions % 4) - 1.5) * 1.8;
+    const offsetY = (Math.floor(collisions / 4) % 3) * 3.2;
+    const displayX = Math.max(3, Math.min(97, normalizedX + offsetX));
+    const displayY = Math.max(5, Math.min(95, normalizedY + offsetY));
+    const showLabel = point.risk >= 55 || collisions === 0;
+
+    return {
+      ...point,
+      displayX,
+      displayY,
+      showLabel,
+    };
+  });
 
   return (
     <div className="matrix-shell">
+      <div className="matrix-toolbar">
+        <div className="matrix-zoom">
+          <button
+            className="chip"
+            type="button"
+            onClick={() => setZoom((current) => Math.max(0.8, Number((current - 0.2).toFixed(1))))}
+            disabled={zoom <= 0.8}
+          >
+            Thu nhỏ
+          </button>
+          <span>{zoomPercent}%</span>
+          <button
+            className="chip"
+            type="button"
+            onClick={() => setZoom((current) => Math.min(2.2, Number((current + 0.2).toFixed(1))))}
+            disabled={zoom >= 2.2}
+          >
+            Phóng to
+          </button>
+          <button className="chip" type="button" onClick={() => setZoom(1)} disabled={zoom === 1}>
+            Mặc định
+          </button>
+        </div>
+        <span className="helper-line">Mẹo: phóng to để tách các điểm đang đứng sát nhau ở vùng cuối.</span>
+      </div>
+      <div className="matrix-legend">
+        <span>
+          <strong>Trái → phải:</strong> tín chỉ tích lũy từ thấp đến cao.
+        </span>
+        <span>
+          <strong>Dưới → trên:</strong> GPA từ thấp đến cao.
+        </span>
+        <span>
+          <strong>Chấm đỏ nhấp nháy:</strong> nhóm cần ưu tiên can thiệp.
+        </span>
+      </div>
       <div className="matrix-grid">
         <div className="matrix-cell">Tín chỉ thấp - GPA thấp</div>
         <div className="matrix-cell">Tín chỉ thấp - GPA tạm ổn</div>
@@ -207,20 +300,39 @@ function MatrixChart({ matrix }: { matrix?: MatrixResponse }) {
         <div className="matrix-cell">Vùng an toàn</div>
       </div>
       <div className="matrix-plot">
-        {matrix.points.map((point) => (
-          <button
-            key={point.mssv}
-            className={`matrix-point ${point.blinking ? 'blinking' : ''}`}
-            style={{ left: `${Math.min(point.x, 100)}%`, bottom: `${Math.min(point.y * 10, 100)}%` }}
-            title={`${point.fullName} - ${point.risk.toFixed(1)}%`}
-          >
-            <span>{point.mssv}</span>
-          </button>
-        ))}
+        <div
+          className="matrix-canvas"
+          style={{
+            width: `${canvasSizeMultiplier * 100}%`,
+            height: `${baseHeight * canvasSizeMultiplier}px`,
+            transform: `scale(${canvasScale})`,
+          }}
+        >
+          <div className="matrix-y-scale">
+            <span>GPA cao</span>
+            <span>GPA trung bình</span>
+            <span>GPA thấp</span>
+          </div>
+          {plottedPoints.map((point) => (
+            <button
+              key={point.mssv}
+              className={`matrix-point ${point.blinking ? 'blinking' : ''}`}
+              style={{ left: `${point.displayX}%`, bottom: `${point.displayY}%` }}
+              title={`${point.fullName} • GPA ${point.y.toFixed(2)} • Rủi ro ${point.risk.toFixed(1)}% • Tín chỉ ${point.x.toFixed(1)}%`}
+            >
+              {point.showLabel ? <span>{point.mssv}</span> : null}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="axis-row">
+        <span>Ít tín chỉ hơn</span>
         <span>Tín chỉ tích lũy (%)</span>
-        <span>GPA</span>
+        <span>Gần hoàn thành hơn</span>
+      </div>
+      <div className="matrix-footnote">
+        Ma trận này ưu tiên đọc theo vị trí: càng sang phải là sinh viên tích lũy tín chỉ tốt hơn, càng lên cao là GPA tốt hơn.
+        Góc dưới bên trái là nhóm cần để mắt nhiều nhất; góc trên bên phải là nhóm an toàn hơn.
       </div>
     </div>
   );
@@ -245,11 +357,14 @@ function BarChart({ rows }: { rows: Array<Record<string, unknown>> }) {
 }
 
 const chatColumnLabels: Record<string, string> = {
+  student_id: 'Mã sinh viên nội bộ',
+  id: 'Mã bản ghi',
   mssv: 'MSSV',
   fullName: 'Họ tên',
   full_name: 'Họ tên',
   classCode: 'Lớp',
   class_code: 'Lớp',
+  class_name: 'Tên lớp',
   currentGpa: 'GPA',
   current_gpa: 'GPA',
   completedCredits: 'Tín chỉ tích lũy',
@@ -259,21 +374,103 @@ const chatColumnLabels: Record<string, string> = {
   failedCourses: 'Số môn rớt',
   lowScoreCourses: 'Số môn điểm thấp',
   delayRiskScore: 'Mức rủi ro (%)',
+  delay_risk_score: 'Mức rủi ro (%)',
   riskBand: 'Nhóm rủi ro',
+  risk_band: 'Nhóm rủi ro',
   quadrant: 'Phân vùng',
   recommendedAction: 'Khuyến nghị',
+  recommended_action: 'Khuyến nghị',
   courseName: 'Môn học',
+  course_name: 'Môn học',
   averageScore: 'Điểm trung bình',
+  average_score: 'Điểm trung bình',
+  avg_score: 'Điểm trung bình',
+  avg_gpa: 'GPA trung bình',
+  student_count: 'Số sinh viên',
+  total_students: 'Tổng số sinh viên',
+  avg_delay_risk_score: 'Điểm rủi ro trung bình',
+  high_risk_count: 'Số sinh viên rủi ro cao',
+  critical_count: 'Số sinh viên nguy cấp',
+  alert_count: 'Số cảnh báo',
+  term_code: 'Học kỳ',
+  course_code: 'Mã môn học',
+  class_count: 'Số lớp',
   count: 'Số lượng',
   bin: 'Khoảng điểm',
 };
 
-function humanizeChatCell(value: unknown): string {
+const hiddenChatColumns = new Set(['student_id', 'id', 'advisor_user_id']);
+
+function humanizeChatHeader(key: string): string {
+  if (chatColumnLabels[key]) {
+    return chatColumnLabels[key];
+  }
+
+  const tokenMap: Record<string, string> = {
+    avg: 'Trung bình',
+    average: 'Trung bình',
+    count: 'Số lượng',
+    total: 'Tổng',
+    student: 'sinh viên',
+    students: 'sinh viên',
+    class: 'lớp',
+    course: 'môn học',
+    risk: 'rủi ro',
+    delay: 'chậm tiến độ',
+    score: 'điểm',
+    gpa: 'GPA',
+    band: 'nhóm',
+    rate: 'tỷ lệ',
+    code: 'mã',
+    name: 'tên',
+    term: 'học kỳ',
+    credit: 'tín chỉ',
+    credits: 'tín chỉ',
+    completion: 'hoàn thành',
+    action: 'khuyến nghị',
+    recommendation: 'khuyến nghị',
+    alert: 'cảnh báo',
+    low: 'thấp',
+    high: 'cao',
+    critical: 'nguy cấp',
+    medium: 'trung bình',
+    failed: 'rớt',
+  };
+
+  const parts = key
+    .split('_')
+    .map((part) => tokenMap[part.toLowerCase()] ?? part)
+    .filter(Boolean);
+
+  if (!parts.length) {
+    return key;
+  }
+
+  const normalized = parts.join(' ').replace(/\s+/g, ' ').trim();
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function humanizeChatCell(key: string, value: unknown): string {
   if (typeof value === 'number') {
     return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.00$/, '');
   }
   if (typeof value === 'boolean') {
     return value ? 'Có' : 'Không';
+  }
+  if (typeof value === 'string') {
+    const normalized = value.toLowerCase();
+    if (key === 'risk_band' || key === 'riskBand') {
+      if (normalized === 'critical') return 'Nguy cấp';
+      if (normalized === 'high') return 'Cao';
+      if (normalized === 'medium') return 'Trung bình';
+      if (normalized === 'low') return 'Thấp';
+    }
+    if (key === 'quadrant') {
+      if (normalized === 'credit_low_gpa_low') return 'Tín chỉ thấp - GPA thấp';
+      if (normalized === 'credit_low_gpa_ok') return 'Tín chỉ thấp - GPA tạm ổn';
+      if (normalized === 'credit_ok_gpa_low') return 'Tín chỉ ổn - GPA thấp';
+      if (normalized === 'safe_zone') return 'Vùng an toàn';
+    }
   }
   return String(value ?? '');
 }
@@ -336,7 +533,7 @@ function ChatResultPanel({ result, error, isPending }: { result?: ChatResult; er
     return <p className="muted">Bạn có thể hỏi dữ liệu học vụ hoặc xin tư vấn/kế hoạch can thiệp học tập.</p>;
   }
 
-  const keys = result.rows.length > 0 ? Object.keys(result.rows[0]) : [];
+  const keys = result.rows.length > 0 ? Object.keys(result.rows[0]).filter((key) => !hiddenChatColumns.has(key)) : [];
   const answerBlocks = parseAnswerBlocks(result.answer);
 
   return (
@@ -365,13 +562,19 @@ function ChatResultPanel({ result, error, isPending }: { result?: ChatResult; er
 
       {result.visualization.type === 'bar_chart' ? <BarChart rows={result.rows} /> : null}
 
+      {result.mode === 'data' && result.rows.length === 0 ? (
+        <p className="muted">
+          Truy vấn đã chạy thành công nhưng hiện không có dòng dữ liệu nào khớp điều kiện lọc.
+        </p>
+      ) : null}
+
       {result.rows.length > 0 && result.visualization.type !== 'bar_chart' ? (
         <div className="table-shell">
           <table>
             <thead>
               <tr>
                 {keys.map((key) => (
-                  <th key={key}>{chatColumnLabels[key] ?? key}</th>
+                  <th key={key}>{humanizeChatHeader(key)}</th>
                 ))}
               </tr>
             </thead>
@@ -379,7 +582,7 @@ function ChatResultPanel({ result, error, isPending }: { result?: ChatResult; er
               {result.rows.map((row, rowIndex) => (
                 <tr key={rowIndex}>
                   {keys.map((key) => (
-                    <td key={key}>{humanizeChatCell(row[key])}</td>
+                    <td key={key}>{humanizeChatCell(key, row[key])}</td>
                   ))}
                 </tr>
               ))}
@@ -507,7 +710,7 @@ function DashboardPage() {
     mutationFn: (message: string) =>
       apiFetch<ChatResult>('/ai/chat-to-data', {
         method: 'POST',
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, mode: inferPromptMode(message) }),
       }),
   });
 
