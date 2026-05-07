@@ -1,18 +1,21 @@
-name: Docker Image CI
-
-on:
-  push:
-    branches: [ "main" ]
+name: Docker Image build 
+on: 
+  push: 
+    branches:
+      - main 
   pull_request:
-    branches: [ "main" ]
-
+    branches:
+      - main 
 jobs:
-
-  build:
-
+  docker-build:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+      - name: checkout source code 
+        uses: action/checkout@v4 
+      - name: build api image
+        run: docker build -f apps/api-python/Dockerfile -t cvht-api:${{ github.sha }} . 
+      - name: build worker image
+        run: docker build -f apps/worker/Dockerfile -t cvht-worker:${{ github.sha }} . 
+      - name: build web image
+        run: docker build -f apps/web/Dockerfile -t cvht-web${{ github.sha }} .
+      
