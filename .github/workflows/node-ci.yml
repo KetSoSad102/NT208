@@ -1,0 +1,103 @@
+name: Node CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/api/**'
+      - 'apps/web/**'
+      - 'apps/worker/**'
+      - 'packages/shared/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.base.json'
+      - '.github/workflows/node-ci.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'apps/api/**'
+      - 'apps/web/**'
+      - 'apps/worker/**'
+      - 'packages/shared/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.base.json'
+      - '.github/workflows/node-ci.yml'
+
+concurrency:
+  group: node-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint API
+        run: npm run lint -w apps/api
+
+      - name: Test API
+        run: npm run test -w apps/api
+
+  worker:
+    name: Worker lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint Worker
+        run: npm run lint -w apps/worker
+
+      - name: Test Worker
+        run: npm run test -w apps/worker
+
+  web:
+    name: Web lint, test & build
+    runs-on: ubuntu-latest
+    env:
+      VITE_API_BASE_URL: http://localhost:3000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint Web
+        run: npm run lint -w apps/web
+
+      - name: Test Web
+        run: npm run test -w apps/web
+
+      - name: Build Web
+        run: npm run build -w apps/web

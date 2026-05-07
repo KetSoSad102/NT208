@@ -1,0 +1,71 @@
+name: Python FastAPI CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/api-python/**'
+      - 'infra/migrations/**'
+      - '.github/workflows/python-fastapi-uv.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'apps/api-python/**'
+      - 'infra/migrations/**'
+      - '.github/workflows/python-fastapi-uv.yml'
+
+concurrency:
+  group: python-fastapi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fastapi:
+    name: FastAPI lint, import & smoke check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/api-python
+    env:
+      DATABASE_URL: postgresql://cvht:cvht@localhost:5432/cvht
+      JWT_SECRET: supersecret_supersecret
+      JWT_EXPIRES_IN: 12h
+      LLM_PROVIDER: openai
+      LLM_API_KEY: dummy
+      LLM_MODEL: gpt-5.4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies with uv
+        run: uv pip install --system -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check app scripts
+
+      - name: Black check
+        run: black --check app scripts
+
+      - name: Compile Python sources
+        run: python -m compileall app scripts
+
+      - name: Import FastAPI app
+        run: python -c "from app.main import app; print(app.title, app.version)"
+
+      - name: Pytest if available
+        run: |
+          if [ -d tests ] && find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) | grep -q .; then
+            pytest -q
+          else
+            echo 'No Python tests found, skipping pytest'
+          fi
