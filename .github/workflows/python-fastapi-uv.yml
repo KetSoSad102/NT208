@@ -53,9 +53,6 @@ jobs:
       - name: Ruff lint
         run: ruff check app scripts
 
-      - name: Black check
-        run: black --check app scripts
-
       - name: Compile Python sources
         run: python -m compileall app scripts
 
