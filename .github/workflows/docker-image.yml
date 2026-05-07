@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout source code 
-        uses: action/checkout@v4 
+        uses: actions/checkout@v4 
       - name: build api image
         run: docker build -f apps/api-python/Dockerfile -t cvht-api:${{ github.sha }} . 
       - name: build worker image
