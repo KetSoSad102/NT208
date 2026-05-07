@@ -9,8 +9,7 @@ from psycopg2.extras import RealDictCursor
 
 # Setup logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -40,8 +39,12 @@ try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("BEGIN")
 
-            admin_hash = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            advisor_hash = bcrypt.hashpw("advisor123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            admin_hash = bcrypt.hashpw(
+                "admin123".encode("utf-8"), bcrypt.gensalt()
+            ).decode("utf-8")
+            advisor_hash = bcrypt.hashpw(
+                "advisor123".encode("utf-8"), bcrypt.gensalt()
+            ).decode("utf-8")
 
             logger.info("Inserting admin and advisor users")
             cur.execute(
@@ -69,8 +72,7 @@ try:
             )
 
             logger.info("Inserting classes")
-            cur.execute(
-                """
+            cur.execute("""
                 INSERT INTO classes (class_code, class_name, advisor_user_id, required_credits)
                 VALUES
                   ('CNTT-K18A', 'Cong nghe thong tin K18A', (SELECT id FROM users WHERE username = 'advisor_1'), 36),
@@ -79,12 +81,10 @@ try:
                   class_name = EXCLUDED.class_name,
                   advisor_user_id = EXCLUDED.advisor_user_id,
                   required_credits = EXCLUDED.required_credits
-                """
-            )
+                """)
 
             logger.info("Inserting terms")
-            cur.execute(
-                """
+            cur.execute("""
                 INSERT INTO terms (term_code, term_name, start_date, end_date)
                 VALUES
                   ('2025-1', 'Hoc ky 1 nam hoc 2025-2026', '2025-09-01', '2026-01-15'),
@@ -93,12 +93,10 @@ try:
                   term_name = EXCLUDED.term_name,
                   start_date = EXCLUDED.start_date,
                   end_date = EXCLUDED.end_date
-                """
-            )
+                """)
 
             logger.info("Inserting courses")
-            cur.execute(
-                """
+            cur.execute("""
                 INSERT INTO courses (course_code, course_name, credits)
                 VALUES
                   ('MTH101', 'Giai tich 1', 3),
@@ -110,12 +108,10 @@ try:
                 ON CONFLICT (course_code) DO UPDATE SET
                   course_name = EXCLUDED.course_name,
                   credits = EXCLUDED.credits
-                """
-            )
+                """)
 
             logger.info("Inserting students")
-            cur.execute(
-                """
+            cur.execute("""
                 WITH class_rows AS (
                   SELECT id, class_code FROM classes WHERE class_code IN ('CNTT-K18A', 'CNTT-K18B')
                 )
@@ -137,12 +133,10 @@ try:
                   full_name = EXCLUDED.full_name,
                   class_id = EXCLUDED.class_id,
                   english_level = EXCLUDED.english_level
-                """
-            )
+                """)
 
             logger.info("Inserting course offerings")
-            cur.execute(
-                """
+            cur.execute("""
                 WITH t1 AS (SELECT id FROM terms WHERE term_code = '2025-1'),
                 t2 AS (SELECT id FROM terms WHERE term_code = '2025-2'),
                 c1 AS (SELECT id FROM courses WHERE course_code IN ('MTH101', 'PHY101', 'PRG101')),
@@ -155,12 +149,10 @@ try:
                 FROM c2 CROSS JOIN t2 CROSS JOIN classes cl
                 ON CONFLICT (course_id, class_id, term_id) DO UPDATE SET
                   lecturer_name = EXCLUDED.lecturer_name
-                """
-            )
+                """)
 
             logger.info("Inserting enrollments and scores")
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT
                   s.id AS student_id,
                   s.mssv,
@@ -171,8 +163,7 @@ try:
                 JOIN course_offerings co ON co.class_id = s.class_id
                 JOIN courses c ON c.id = co.course_id
                 JOIN terms t ON t.id = co.term_id
-                """
-            )
+                """)
             enrollment_rows = cur.fetchall()
 
             for row in enrollment_rows:
@@ -180,25 +171,65 @@ try:
                 score = 6.2 + (idx % 4) + (ord(str(row["course_code"])[0]) % 2) * 0.35
                 midterm = max(2.0, min(9.5, score - 0.4))
 
-                if row["mssv"] == "SV001" and row["term_code"] == "2025-1" and row["course_code"] == "PRG101":
+                if (
+                    row["mssv"] == "SV001"
+                    and row["term_code"] == "2025-1"
+                    and row["course_code"] == "PRG101"
+                ):
                     score = 3.6
-                if row["mssv"] == "SV001" and row["term_code"] == "2025-2" and row["course_code"] == "DBI201":
+                if (
+                    row["mssv"] == "SV001"
+                    and row["term_code"] == "2025-2"
+                    and row["course_code"] == "DBI201"
+                ):
                     score = 3.2
-                if row["mssv"] == "SV001" and row["term_code"] == "2025-2" and row["course_code"] == "SE201":
+                if (
+                    row["mssv"] == "SV001"
+                    and row["term_code"] == "2025-2"
+                    and row["course_code"] == "SE201"
+                ):
                     score = 4.1
-                if row["mssv"] == "SV002" and row["term_code"] == "2025-1" and row["course_code"] == "PRG101":
+                if (
+                    row["mssv"] == "SV002"
+                    and row["term_code"] == "2025-1"
+                    and row["course_code"] == "PRG101"
+                ):
                     score = 4.2
-                if row["mssv"] == "SV002" and row["term_code"] == "2025-2" and row["course_code"] == "NET201":
+                if (
+                    row["mssv"] == "SV002"
+                    and row["term_code"] == "2025-2"
+                    and row["course_code"] == "NET201"
+                ):
                     score = 4.3
-                if row["mssv"] == "SV002" and row["term_code"] == "2025-2" and row["course_code"] == "DBI201":
+                if (
+                    row["mssv"] == "SV002"
+                    and row["term_code"] == "2025-2"
+                    and row["course_code"] == "DBI201"
+                ):
                     score = 4.8
-                if row["mssv"] == "SV003" and row["term_code"] == "2025-2" and row["course_code"] == "DBI201":
+                if (
+                    row["mssv"] == "SV003"
+                    and row["term_code"] == "2025-2"
+                    and row["course_code"] == "DBI201"
+                ):
                     score = 5.1
-                if row["mssv"] == "SV004" and row["term_code"] == "2025-2" and row["course_code"] == "SE201":
+                if (
+                    row["mssv"] == "SV004"
+                    and row["term_code"] == "2025-2"
+                    and row["course_code"] == "SE201"
+                ):
                     score = 5.0
-                if row["mssv"] == "SV016" and row["term_code"] == "2025-2" and row["course_code"] == "NET201":
+                if (
+                    row["mssv"] == "SV016"
+                    and row["term_code"] == "2025-2"
+                    and row["course_code"] == "NET201"
+                ):
                     score = 3.9
-                if row["mssv"] == "SV016" and row["term_code"] == "2025-2" and row["course_code"] == "DBI201":
+                if (
+                    row["mssv"] == "SV016"
+                    and row["term_code"] == "2025-2"
+                    and row["course_code"] == "DBI201"
+                ):
                     score = 4.6
 
                 score = min(9.8, max(2.5, score))
@@ -243,8 +274,7 @@ try:
             cur.execute("DELETE FROM ai_briefs")
 
             logger.info("Computing GPA from enrollments")
-            cur.execute(
-                """
+            cur.execute("""
                 UPDATE students s
                 SET current_gpa = stats.avg_score
                 FROM (
@@ -254,9 +284,8 @@ try:
                   GROUP BY s2.id
                 ) AS stats
                 WHERE stats.id = s.id
-                """
-            )
-            
+                """)
+
             conn.commit()
             logger.info("Seed data completed successfully")
 

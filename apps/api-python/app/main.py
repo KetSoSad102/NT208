@@ -113,7 +113,9 @@ def parse_expires_in_to_seconds(value: str) -> int:
 
 
 def sign_token(user: dict[str, Any]) -> str:
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=parse_expires_in_to_seconds(JWT_EXPIRES_IN))
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        seconds=parse_expires_in_to_seconds(JWT_EXPIRES_IN)
+    )
     payload = {
         "sub": user["id"],
         "username": user["username"],
@@ -124,7 +126,13 @@ def sign_token(user: dict[str, Any]) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
 
-def write_audit_log(user: CurrentUser | None, action: str, resource_type: str, resource_id: str | None, metadata: dict[str, Any] | None = None) -> None:
+def write_audit_log(
+    user: CurrentUser | None,
+    action: str,
+    resource_type: str,
+    resource_id: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     execute(
         """
         INSERT INTO audit_logs (user_id, action, resource_type, resource_id, metadata)
@@ -142,12 +150,16 @@ def write_audit_log(user: CurrentUser | None, action: str, resource_type: str, r
 
 def require_auth(authorization: str | None = Header(default=None)) -> CurrentUser:
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token"
+        )
     token = authorization.removeprefix("Bearer ").strip()
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
     except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
+        ) from exc
     return CurrentUser(
         user_id=payload["sub"],
         username=payload["username"],
@@ -159,7 +171,9 @@ def require_auth(authorization: str | None = Header(default=None)) -> CurrentUse
 def require_roles(*roles: str):
     def dependency(user: CurrentUser = Depends(require_auth)) -> CurrentUser:
         if user.role not in roles:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden"
+            )
         return user
 
     return dependency
@@ -245,7 +259,9 @@ def normalize_text(value: str | None) -> str:
 
 def get_accessible_classes(user: CurrentUser) -> list[dict[str, Any]]:
     if user.role == "DEAN_ADMIN":
-        return query("SELECT id, class_code, class_name, required_credits FROM classes ORDER BY class_code")
+        return query(
+            "SELECT id, class_code, class_name, required_credits FROM classes ORDER BY class_code"
+        )
     return query(
         """
         SELECT id, class_code, class_name, required_credits
@@ -259,7 +275,10 @@ def get_accessible_classes(user: CurrentUser) -> list[dict[str, Any]]:
 
 def can_access_class(user: CurrentUser, class_id: str) -> bool:
     if user.role == "DEAN_ADMIN":
-        return query_one("SELECT 1 AS ok FROM classes WHERE id = %s", (class_id,)) is not None
+        return (
+            query_one("SELECT 1 AS ok FROM classes WHERE id = %s", (class_id,))
+            is not None
+        )
     return (
         query_one(
             "SELECT 1 AS ok FROM classes WHERE id = %s AND advisor_user_id = %s",
@@ -271,7 +290,10 @@ def can_access_class(user: CurrentUser, class_id: str) -> bool:
 
 def can_access_student(user: CurrentUser, mssv: str) -> bool:
     if user.role == "DEAN_ADMIN":
-        return query_one("SELECT 1 AS ok FROM students WHERE mssv = %s", (mssv,)) is not None
+        return (
+            query_one("SELECT 1 AS ok FROM students WHERE mssv = %s", (mssv,))
+            is not None
+        )
     return (
         query_one(
             """
@@ -398,13 +420,18 @@ def compact_risk_row(student: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def fetch_risk_students(user: CurrentUser, class_code: str | None = None) -> list[dict[str, Any]]:
+def fetch_risk_students(
+    user: CurrentUser, class_code: str | None = None
+) -> list[dict[str, Any]]:
     class_rows = get_accessible_classes(user)
     allowed_codes = [row["class_code"] for row in class_rows]
     if not allowed_codes:
         return []
     if class_code and class_code not in allowed_codes:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Forbidden class scope: {class_code}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden class scope: {class_code}",
+        )
 
     sql = (
         "WITH risk AS (" + RISK_SQL + ") "
@@ -440,7 +467,9 @@ def fetch_risk_students(user: CurrentUser, class_code: str | None = None) -> lis
                 "delayRiskScore": round(score, 1),
                 "riskBand": summarize_risk_band(score),
                 "quadrant": summarize_quadrant(completion_ratio, current_gpa),
-                "recommendedAction": recommend_action(score, failed_courses, low_score_courses),
+                "recommendedAction": recommend_action(
+                    score, failed_courses, low_score_courses
+                ),
             }
         )
     return enriched
@@ -468,8 +497,14 @@ def resolve_llm(provider: str):
     if not api_key:
         return None
     if provider == "gemini":
-        return ChatGoogleGenerativeAI(model=settings["model"], google_api_key=api_key, temperature=0)
-    kwargs: dict[str, Any] = {"model": settings["model"], "api_key": api_key, "temperature": 0}
+        return ChatGoogleGenerativeAI(
+            model=settings["model"], google_api_key=api_key, temperature=0
+        )
+    kwargs: dict[str, Any] = {
+        "model": settings["model"],
+        "api_key": api_key,
+        "temperature": 0,
+    }
     if settings["base_url"]:
         kwargs["base_url"] = settings["base_url"]
     return ChatOpenAI(**kwargs)
@@ -514,7 +549,9 @@ def llm_json(system_prompt: str, user_prompt: str) -> dict[str, Any] | None:
             )
             text = getattr(response, "content", "")
             if isinstance(text, list):
-                text = "".join(chunk.get("text", "") for chunk in text if isinstance(chunk, dict))
+                text = "".join(
+                    chunk.get("text", "") for chunk in text if isinstance(chunk, dict)
+                )
             if not isinstance(text, str):
                 continue
             match = re.search(r"\{.*\}", text, re.DOTALL)
@@ -541,36 +578,62 @@ def extract_course(message: str) -> dict[str, str | None]:
     for course in courses:
         course_name = normalize_text(course["course_name"])
         if course_name and course_name in normalized:
-            return {"courseCode": course["course_code"], "courseName": course["course_name"]}
+            return {
+                "courseCode": course["course_code"],
+                "courseName": course["course_name"],
+            }
         if course["course_code"].lower() in normalized:
-            return {"courseCode": course["course_code"], "courseName": course["course_name"]}
+            return {
+                "courseCode": course["course_code"],
+                "courseName": course["course_name"],
+            }
     return {"courseCode": None, "courseName": None}
 
 
-def build_rule_based_plan(message: str, class_codes: list[str] | None = None) -> dict[str, Any]:
+def build_rule_based_plan(
+    message: str, class_codes: list[str] | None = None
+) -> dict[str, Any]:
     normalized = normalize_text(message)
     class_code = extract_class_code_from_message(message, class_codes or [])
     course = extract_course(message)
-    limit_match = re.search(r"\btop\s*(\d+)\b", normalized) or re.search(r"\b(\d+)\s+(?:ban|sinh vien|sv)\b", normalized)
+    limit_match = re.search(r"\btop\s*(\d+)\b", normalized) or re.search(
+        r"\b(\d+)\s+(?:ban|sinh vien|sv)\b", normalized
+    )
     limit = int(limit_match.group(1)) if limit_match else 5
 
     if any(token in normalized for token in ["ve", "bieu do", "pho diem", "histogram"]):
-        return {"tool": "grade_distribution", "params": {**course, "classCode": class_code}}
-    if (
-        ("top" in normalized and "gpa" in normalized)
-        or any(token in normalized for token in ["tot nhat", "xuat sac nhat", "thanh tich tot nhat", "thanh tich cao nhat"])
+        return {
+            "tool": "grade_distribution",
+            "params": {**course, "classCode": class_code},
+        }
+    if ("top" in normalized and "gpa" in normalized) or any(
+        token in normalized
+        for token in [
+            "tot nhat",
+            "xuat sac nhat",
+            "thanh tich tot nhat",
+            "thanh tich cao nhat",
+        ]
     ):
-        return {"tool": "top_students", "params": {"classCode": class_code, "limit": limit}}
+        return {
+            "tool": "top_students",
+            "params": {"classCode": class_code, "limit": limit},
+        }
     if any(token in normalized for token in ["nguy co", "rot mon", "canh bao"]) and (
         course["courseCode"] or course["courseName"]
     ):
-        return {"tool": "at_risk_students", "params": {**course, "classCode": class_code}}
+        return {
+            "tool": "at_risk_students",
+            "params": {**course, "classCode": class_code},
+        }
     if any(token in normalized for token in ["tong quan", "rui ro", "hoc vu"]):
         return {"tool": "risk_overview", "params": {"classCode": class_code}}
     return {"tool": "risk_overview", "params": {"classCode": class_code}}
 
 
-def plan_chat_query(message: str, class_codes: list[str] | None = None) -> dict[str, Any]:
+def plan_chat_query(
+    message: str, class_codes: list[str] | None = None
+) -> dict[str, Any]:
     forced_rule_plan = build_rule_based_plan(message, class_codes)
     normalized = normalize_text(message)
     if forced_rule_plan["tool"] == "grade_distribution":
@@ -579,13 +642,15 @@ def plan_chat_query(message: str, class_codes: list[str] | None = None) -> dict[
     llm_plan = llm_json(
         (
             "Ban la bo lap ke hoach chat-to-data. "
-            "Tra ve JSON voi dang {\"tool\": string, \"params\": object}. "
+            'Tra ve JSON voi dang {"tool": string, "params": object}. '
             "Chi duoc chon mot trong cac tool: top_students, at_risk_students, grade_distribution, risk_overview."
         ),
         message,
     )
     if isinstance(llm_plan, dict) and isinstance(llm_plan.get("params"), dict):
-        if any(token in normalized for token in ["ve", "bieu do", "pho diem", "histogram"]):
+        if any(
+            token in normalized for token in ["ve", "bieu do", "pho diem", "histogram"]
+        ):
             params = dict(llm_plan.get("params", {}))
             params.update({k: v for k, v in forced_rule_plan["params"].items() if v})
             return {"tool": "grade_distribution", "params": params}
@@ -593,7 +658,9 @@ def plan_chat_query(message: str, class_codes: list[str] | None = None) -> dict[
     return forced_rule_plan
 
 
-def build_llm_brief_payload(class_code: str, students: list[dict[str, Any]], metrics: dict[str, Any]) -> str:
+def build_llm_brief_payload(
+    class_code: str, students: list[dict[str, Any]], metrics: dict[str, Any]
+) -> str:
     top = students[0] if students else None
     return json.dumps(
         {
@@ -610,7 +677,7 @@ def llm_brief(payload: str) -> str | None:
     response = llm_json(
         (
             "Ban la tro ly AI hoc vu viet brief ngan, ro, thuc dung. "
-            "Tra ve JSON dang {\"summary\": \"...\"} bang tieng Viet, toi da 2 cau."
+            'Tra ve JSON dang {"summary": "..."} bang tieng Viet, toi da 2 cau.'
         ),
         payload,
     )
@@ -619,9 +686,17 @@ def llm_brief(payload: str) -> str | None:
     return None
 
 
-def grade_distribution_rows(course_code: str | None, course_name: str | None, class_code: str | None, allowed_codes: list[str]) -> dict[str, Any]:
+def grade_distribution_rows(
+    course_code: str | None,
+    course_name: str | None,
+    class_code: str | None,
+    allowed_codes: list[str],
+) -> dict[str, Any]:
     if not course_code and not course_name:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Can chi ro mon hoc de ve pho diem")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Can chi ro mon hoc de ve pho diem",
+        )
 
     sql = """
     SELECT
@@ -660,7 +735,10 @@ def execute_chat_plan(plan: dict[str, Any], user: CurrentUser) -> dict[str, Any]
     class_code = params.get("classCode")
     allowed_codes = [row["class_code"] for row in get_accessible_classes(user)]
     if class_code and class_code not in allowed_codes:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Forbidden class scope: {class_code}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden class scope: {class_code}",
+        )
 
     if plan["tool"] == "top_students":
         limit = int(params.get("limit") or 5)
@@ -729,7 +807,12 @@ def execute_chat_plan(plan: dict[str, Any], user: CurrentUser) -> dict[str, Any]
         }
 
     if plan["tool"] == "grade_distribution":
-        return grade_distribution_rows(params.get("courseCode"), params.get("courseName"), class_code, allowed_codes)
+        return grade_distribution_rows(
+            params.get("courseCode"),
+            params.get("courseName"),
+            class_code,
+            allowed_codes,
+        )
 
     students = fetch_risk_students(user, class_code)
     top = students[:5]
@@ -749,16 +832,27 @@ def execute_chat_plan(plan: dict[str, Any], user: CurrentUser) -> dict[str, Any]
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "service": "api-python", "timestamp": datetime.now(timezone.utc).isoformat()}
+    return {
+        "status": "ok",
+        "service": "api-python",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.post("/auth/login")
 def login(payload: LoginPayload) -> dict[str, Any]:
     user = query_one("SELECT * FROM users WHERE username = %s", (payload.username,))
-    if not user or not bcrypt.checkpw(payload.password.encode("utf-8"), user["password_hash"].encode("utf-8")):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sai tai khoan hoac mat khau")
+    if not user or not bcrypt.checkpw(
+        payload.password.encode("utf-8"), user["password_hash"].encode("utf-8")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Sai tai khoan hoac mat khau",
+        )
     token = sign_token(user)
-    write_audit_log(None, "login", "user", str(user["id"]), {"username": payload.username})
+    write_audit_log(
+        None, "login", "user", str(user["id"]), {"username": payload.username}
+    )
     return {"accessToken": token}
 
 
@@ -768,9 +862,13 @@ def classes(user: CurrentUser = Depends(require_auth)) -> list[dict[str, Any]]:
 
 
 @app.get("/classes/{class_id}/students")
-def class_students(class_id: str, user: CurrentUser = Depends(require_auth)) -> list[dict[str, Any]]:
+def class_students(
+    class_id: str, user: CurrentUser = Depends(require_auth)
+) -> list[dict[str, Any]]:
     if not can_access_class(user, class_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden class scope")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden class scope"
+        )
     return query(
         """
         SELECT id, mssv, full_name, COALESCE(current_gpa, 0)::float AS current_gpa
@@ -783,9 +881,13 @@ def class_students(class_id: str, user: CurrentUser = Depends(require_auth)) -> 
 
 
 @app.get("/students/{mssv}/dashboard")
-def student_dashboard(mssv: str, user: CurrentUser = Depends(require_auth)) -> dict[str, Any]:
+def student_dashboard(
+    mssv: str, user: CurrentUser = Depends(require_auth)
+) -> dict[str, Any]:
     if not can_access_student(user, mssv):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+        )
     student = query_one(
         """
         SELECT s.id, s.mssv, s.full_name, c.class_code, c.required_credits
@@ -796,7 +898,9 @@ def student_dashboard(mssv: str, user: CurrentUser = Depends(require_auth)) -> d
         (mssv,),
     )
     if not student:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
+        )
 
     gpa_trend = query(
         """
@@ -811,8 +915,9 @@ def student_dashboard(mssv: str, user: CurrentUser = Depends(require_auth)) -> d
         """,
         (mssv,),
     )
-    credit_progress = query_one(
-        """
+    credit_progress = (
+        query_one(
+            """
         SELECT
           COALESCE(SUM(CASE WHEN e.passed THEN c.credits ELSE 0 END), 0)::float AS completed,
           cl.required_credits::float AS required
@@ -824,8 +929,10 @@ def student_dashboard(mssv: str, user: CurrentUser = Depends(require_auth)) -> d
         WHERE s.mssv = %s
         GROUP BY cl.required_credits
         """,
-        (mssv,),
-    ) or {"completed": 0, "required": 0}
+            (mssv,),
+        )
+        or {"completed": 0, "required": 0}
+    )
     alerts = query(
         """
         SELECT id, alert_type, severity, message, created_at
@@ -846,7 +953,9 @@ def student_dashboard(mssv: str, user: CurrentUser = Depends(require_auth)) -> d
         """,
         (student["id"],),
     )
-    risk_profile = next((item for item in fetch_risk_students(user) if item["mssv"] == mssv), None)
+    risk_profile = next(
+        (item for item in fetch_risk_students(user) if item["mssv"] == mssv), None
+    )
     completed = float(credit_progress["completed"] or 0)
     required = float(credit_progress["required"] or 0)
     return {
@@ -869,9 +978,13 @@ def student_dashboard(mssv: str, user: CurrentUser = Depends(require_auth)) -> d
 
 
 @app.get("/students/{mssv}/alerts")
-def student_alerts(mssv: str, user: CurrentUser = Depends(require_auth)) -> list[dict[str, Any]]:
+def student_alerts(
+    mssv: str, user: CurrentUser = Depends(require_auth)
+) -> list[dict[str, Any]]:
     if not can_access_student(user, mssv):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+        )
     student = query_one("SELECT id FROM students WHERE mssv = %s", (mssv,))
     return query(
         "SELECT * FROM alerts WHERE student_id = %s ORDER BY created_at DESC",
@@ -880,12 +993,18 @@ def student_alerts(mssv: str, user: CurrentUser = Depends(require_auth)) -> list
 
 
 @app.post("/students/{mssv}/notes")
-def add_note(mssv: str, payload: NotePayload, user: CurrentUser = Depends(require_auth)) -> dict[str, Any]:
+def add_note(
+    mssv: str, payload: NotePayload, user: CurrentUser = Depends(require_auth)
+) -> dict[str, Any]:
     if not can_access_student(user, mssv):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+        )
     note_text = payload.note.strip()
     if not note_text:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Note must not be empty")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Note must not be empty"
+        )
     student = query_one("SELECT id FROM students WHERE mssv = %s", (mssv,))
     execute(
         """
@@ -894,12 +1013,16 @@ def add_note(mssv: str, payload: NotePayload, user: CurrentUser = Depends(requir
         """,
         (student["id"], user.user_id, note_text),
     )
-    write_audit_log(user, "create_note", "student", mssv, {"note_length": len(note_text)})
+    write_audit_log(
+        user, "create_note", "student", mssv, {"note_length": len(note_text)}
+    )
     return {"message": "Note saved"}
 
 
 @app.get("/analytics/grade-distributions")
-def analytics_grade_distribution(courseOfferingId: str, user: CurrentUser = Depends(require_auth)) -> dict[str, Any]:
+def analytics_grade_distribution(
+    courseOfferingId: str, user: CurrentUser = Depends(require_auth)
+) -> dict[str, Any]:
     offering = query_one(
         """
         SELECT co.id, cl.class_code, c.course_name, c.course_code
@@ -911,24 +1034,43 @@ def analytics_grade_distribution(courseOfferingId: str, user: CurrentUser = Depe
         (courseOfferingId,),
     )
     if not offering:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course offering not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Course offering not found"
+        )
     allowed_codes = [row["class_code"] for row in get_accessible_classes(user)]
     if offering["class_code"] not in allowed_codes:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden class scope")
-    return grade_distribution_rows(offering["course_code"], offering["course_name"], offering["class_code"], allowed_codes)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden class scope"
+        )
+    return grade_distribution_rows(
+        offering["course_code"],
+        offering["course_name"],
+        offering["class_code"],
+        allowed_codes,
+    )
 
 
 @app.get("/analytics/graduation-forecast")
 def graduation_forecast(user: CurrentUser = Depends(require_auth)) -> dict[str, Any]:
     students = fetch_risk_students(user)
-    on_track = len([item for item in students if item["completionRatio"] >= 0.75 and item["currentGpa"] >= 5])
-    watchlist = len([item for item in students if item["riskBand"] in {"medium", "high"}])
+    on_track = len(
+        [
+            item
+            for item in students
+            if item["completionRatio"] >= 0.75 and item["currentGpa"] >= 5
+        ]
+    )
+    watchlist = len(
+        [item for item in students if item["riskBand"] in {"medium", "high"}]
+    )
     critical = len([item for item in students if item["riskBand"] == "critical"])
     return {"onTrack": on_track, "watchlist": watchlist, "critical": critical}
 
 
 @app.get("/analytics/class-leaderboard")
-def class_leaderboard(user: CurrentUser = Depends(require_auth)) -> list[dict[str, Any]]:
+def class_leaderboard(
+    user: CurrentUser = Depends(require_auth),
+) -> list[dict[str, Any]]:
     allowed_codes = [row["class_code"] for row in get_accessible_classes(user)]
     return query(
         """
@@ -962,22 +1104,36 @@ def ai_overview(user: CurrentUser = Depends(require_auth)) -> dict[str, Any]:
     return {
         "kpis": {
             "students": len(students),
-            "highRisk": len([item for item in students if item["delayRiskScore"] >= 55]),
-            "critical": len([item for item in students if item["delayRiskScore"] >= 75]),
+            "highRisk": len(
+                [item for item in students if item["delayRiskScore"] >= 55]
+            ),
+            "critical": len(
+                [item for item in students if item["delayRiskScore"] >= 75]
+            ),
             "alerts": alerts_count,
-            "averageRisk": round(sum(item["delayRiskScore"] for item in students) / len(students), 1) if students else 0,
+            "averageRisk": (
+                round(
+                    sum(item["delayRiskScore"] for item in students) / len(students), 1
+                )
+                if students
+                else 0
+            ),
         },
         "topRisks": students[:6],
     }
 
 
 @app.get("/ai/predictive/students")
-def predictive_students(classCode: str | None = None, user: CurrentUser = Depends(require_auth)) -> list[dict[str, Any]]:
+def predictive_students(
+    classCode: str | None = None, user: CurrentUser = Depends(require_auth)
+) -> list[dict[str, Any]]:
     return fetch_risk_students(user, classCode)
 
 
 @app.get("/ai/predictive/matrix")
-def predictive_matrix(classCode: str | None = None, user: CurrentUser = Depends(require_auth)) -> dict[str, Any]:
+def predictive_matrix(
+    classCode: str | None = None, user: CurrentUser = Depends(require_auth)
+) -> dict[str, Any]:
     students = fetch_risk_students(user, classCode)
     return {
         "points": [
@@ -1045,22 +1201,29 @@ def anomaly_briefs(user: CurrentUser = Depends(require_auth)) -> list[dict[str, 
     briefs: list[dict[str, Any]] = []
     for class_row in get_accessible_classes(user):
         students = fetch_risk_students(user, class_row["class_code"])
-        average_score_row = query_one(
-            """
+        average_score_row = (
+            query_one(
+                """
             SELECT ROUND(AVG(e.final_score)::numeric, 2) AS average_score
             FROM enrollments e
             JOIN students s ON s.id = e.student_id
             JOIN classes c ON c.id = s.class_id
             WHERE c.class_code = %s
             """,
-            (class_row["class_code"],),
-        ) or {"average_score": 0}
+                (class_row["class_code"],),
+            )
+            or {"average_score": 0}
+        )
         metrics = {
             "studentCount": len(students),
             "failedNow": len([item for item in students if item["failedCourses"] > 0]),
-            "borderline": len([item for item in students if item["riskBand"] == "medium"]),
+            "borderline": len(
+                [item for item in students if item["riskBand"] == "medium"]
+            ),
             "averageScore": float(average_score_row["average_score"] or 0),
-            "highRiskCount": len([item for item in students if item["riskBand"] in {"high", "critical"}]),
+            "highRiskCount": len(
+                [item for item in students if item["riskBand"] in {"high", "critical"}]
+            ),
             "topRiskStudent": students[0]["fullName"] if students else None,
         }
         priority = "critical" if metrics["highRiskCount"] >= 3 else "watch"
@@ -1099,7 +1262,9 @@ def anomaly_briefs(user: CurrentUser = Depends(require_auth)) -> list[dict[str, 
 
 
 @app.post("/ai/chat-to-data")
-def chat_to_data(payload: ChatPayload, user: CurrentUser = Depends(require_auth)) -> dict[str, Any]:
+def chat_to_data(
+    payload: ChatPayload, user: CurrentUser = Depends(require_auth)
+) -> dict[str, Any]:
     class_codes = [row["class_code"] for row in get_accessible_classes(user)]
     plan = plan_chat_query(payload.message, class_codes)
     result = execute_chat_plan(plan, user)
@@ -1110,13 +1275,17 @@ def chat_to_data(payload: ChatPayload, user: CurrentUser = Depends(require_auth)
         "sqlPreview": result.get("sqlPreview"),
         "rows": result["rows"],
         "visualization": result["visualization"],
-        "llmEnabled": any(resolve_llm(provider) is not None for provider in provider_order()),
+        "llmEnabled": any(
+            resolve_llm(provider) is not None for provider in provider_order()
+        ),
         "provider": LLM_PROVIDER,
     }
 
 
 @app.post("/admin/import-jobs/trigger")
-def trigger_import(payload: ImportPayload, user: CurrentUser = Depends(require_roles("DEAN_ADMIN"))) -> dict[str, Any]:
+def trigger_import(
+    payload: ImportPayload, user: CurrentUser = Depends(require_roles("DEAN_ADMIN"))
+) -> dict[str, Any]:
     row = query_one(
         """
         INSERT INTO import_jobs (source_name, status, created_by)
