@@ -17,5 +17,5 @@ jobs:
       - name: build worker image
         run: docker build -f apps/worker/Dockerfile -t cvht-worker:${{ github.sha }} . 
       - name: build web image
-        run: docker build -f apps/web/Dockerfile -t cvht-web${{ github.sha }} .
+        run: docker build -f apps/web/Dockerfile -t cvht-web:${{ github.sha }} .
       
