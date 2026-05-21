@@ -79,15 +79,28 @@ export async function getTopKillerCoursesByClass(classId: string) {
 }
 
 export async function getGraduationForecast() {
-  const rs = await pool.query<{ mssv: string; completed_credits: string; required_credits: string }>(`
-    SELECT s.mssv,
-      COALESCE(SUM(CASE WHEN e.passed THEN c.credits ELSE 0 END), 0)::text AS completed_credits,
-      cl.required_credits::text AS required_credits
+  const rs = await pool.query<{ mssv: string; completed_credits: string; required_credits: string; debt_credits: string }>(`
+    WITH course_state AS (
+      SELECT
+        s.id AS student_id,
+        c.course_code,
+        c.credits,
+        BOOL_OR(e.passed) AS has_passed,
+        BOOL_OR(e.passed = false OR e.final_score < 5) AS has_failed
+      FROM students s
+      LEFT JOIN enrollments e ON e.student_id = s.id
+      LEFT JOIN course_offerings co ON co.id = e.course_offering_id
+      LEFT JOIN courses c ON c.id = co.course_id
+      GROUP BY s.id, c.course_code, c.credits
+    )
+    SELECT
+      s.mssv,
+      COALESCE(SUM(CASE WHEN cs.has_passed THEN cs.credits ELSE 0 END), 0)::text AS completed_credits,
+      cl.required_credits::text AS required_credits,
+      COALESCE(SUM(CASE WHEN cs.has_failed AND NOT cs.has_passed THEN cs.credits ELSE 0 END), 0)::text AS debt_credits
     FROM students s
-    LEFT JOIN enrollments e ON e.student_id = s.id
-    LEFT JOIN course_offerings co ON co.id = e.course_offering_id
-    LEFT JOIN courses c ON c.id = co.course_id
     JOIN classes cl ON cl.id = s.class_id
+    LEFT JOIN course_state cs ON cs.student_id = s.id
     GROUP BY s.mssv, cl.required_credits
     ORDER BY s.mssv;
   `);
@@ -96,6 +109,6 @@ export async function getGraduationForecast() {
     mssv: r.mssv,
     completedCredits: Number(r.completed_credits),
     requiredCredits: Number(r.required_credits),
-    debtCredits: Math.max(0, Number(r.required_credits) - Number(r.completed_credits)),
+    debtCredits: Number(r.debt_credits),
   }));
 }

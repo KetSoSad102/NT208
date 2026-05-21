@@ -4,13 +4,20 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiFetch, clearToken, setToken } from './api/client';
 
 type ClassItem = { id: string; class_code: string; class_name: string };
-type Student = { id: string; mssv: string; full_name: string; current_gpa: number | string | null };
+type Student = {
+  id: string;
+  mssv: string;
+  full_name: string;
+  current_gpa: number | string | null;
+  academic_status?: string;
+};
 
 type StudentRisk = {
   id?: string;
   mssv: string;
   fullName: string;
   classCode: string;
+  academicStatus?: string;
   currentGpa: number;
   completedCredits: number;
   requiredCredits: number;
@@ -31,6 +38,52 @@ type DashboardResponse = {
   alerts: Array<{ id: string; message: string; severity: string }>;
   notes: Array<{ note: string; created_at: string }>;
   riskProfile?: StudentRisk;
+};
+
+type AcademicProgressResponse = {
+  identification: {
+    program: string;
+    programName: string;
+    trainingSystem: string;
+    evidence: string;
+  };
+  baseline: {
+    totalCredits?: number;
+    timelineAvailable: boolean;
+    note: string;
+  };
+  termProgress: Array<{
+    termIndex: number;
+    termCode: string;
+    termName: string;
+    registeredCredits: number;
+    passedCredits: number;
+    cumulativePassedCredits: number;
+    validRegistration: boolean;
+    status: 'normal' | 'delayed' | 'in_progress_warning';
+    reason: string;
+  }>;
+  failedCourses: Array<{
+    termCode: string;
+    courseCode: string;
+    courseName: string;
+    credits: number;
+    finalScore: number;
+    letterGrade: string;
+  }>;
+  missingCourses: {
+    status: 'computed' | 'timeline_missing' | 'unknown_program';
+    note: string;
+    items: Array<{ code?: string; name: string; credits?: number; group: string }>;
+  };
+  currentRegistration: {
+    termCode?: string;
+    currentCredits: number;
+    minimumCredits: number;
+    additionalCreditsNeeded: number;
+    recommendationNote: string;
+    suggestedCourses: Array<{ code?: string; name: string; credits?: number; group: string }>;
+  };
 };
 
 type OverviewResponse = {
@@ -202,8 +255,8 @@ function KpiCard({ label, value, note }: { label: string; value: string | number
   return (
     <div className="metric-card">
       <span className="metric-label">{label}</span>
-      <strong>{value}</strong>
-      <p>{note}</p>
+      <strong className="metric-value">{value}</strong>
+      <p className="metric-note">{note}</p>
     </div>
   );
 }
@@ -216,7 +269,8 @@ function MiniTrend({ items }: { items: Array<{ termCode: string; gpa: number }> 
       {items.map((item) => (
         <div className="mini-bar" key={item.termCode}>
           <div className="mini-bar-fill" style={{ height: `${(item.gpa / max) * 100}%` }} />
-          <span>{item.termCode}</span>
+          <strong className="mini-bar-value">{formatScore(item.gpa, 2)}</strong>
+          <span className="mini-bar-label">{item.termCode}</span>
         </div>
       ))}
     </div>
@@ -227,7 +281,7 @@ function MatrixChart({ matrix }: { matrix?: MatrixResponse }) {
   if (!matrix) return <p className="muted">Đang tải ma trận rủi ro...</p>;
   const [zoom, setZoom] = useState(1);
   const zoomPercent = Math.round(zoom * 100);
-  const baseHeight = 360;
+  const baseHeight = 420;
   const canvasScale = zoom < 1 ? zoom : 1;
   const canvasSizeMultiplier = zoom > 1 ? zoom : 1;
 
@@ -280,24 +334,6 @@ function MatrixChart({ matrix }: { matrix?: MatrixResponse }) {
             Mặc định
           </button>
         </div>
-        <span className="helper-line">Mẹo: phóng to để tách các điểm đang đứng sát nhau ở vùng cuối.</span>
-      </div>
-      <div className="matrix-legend">
-        <span>
-          <strong>Trái → phải:</strong> tín chỉ tích lũy từ thấp đến cao.
-        </span>
-        <span>
-          <strong>Dưới → trên:</strong> GPA từ thấp đến cao.
-        </span>
-        <span>
-          <strong>Chấm đỏ nhấp nháy:</strong> nhóm cần ưu tiên can thiệp.
-        </span>
-      </div>
-      <div className="matrix-grid">
-        <div className="matrix-cell">Tín chỉ thấp - GPA thấp</div>
-        <div className="matrix-cell">Tín chỉ thấp - GPA tạm ổn</div>
-        <div className="matrix-cell">Tín chỉ ổn - GPA thấp</div>
-        <div className="matrix-cell">Vùng an toàn</div>
       </div>
       <div className="matrix-plot">
         <div
@@ -329,10 +365,6 @@ function MatrixChart({ matrix }: { matrix?: MatrixResponse }) {
         <span>Ít tín chỉ hơn</span>
         <span>Tín chỉ tích lũy (%)</span>
         <span>Gần hoàn thành hơn</span>
-      </div>
-      <div className="matrix-footnote">
-        Ma trận này ưu tiên đọc theo vị trí: càng sang phải là sinh viên tích lũy tín chỉ tốt hơn, càng lên cao là GPA tốt hơn.
-        Góc dưới bên trái là nhóm cần để mắt nhiều nhất; góc trên bên phải là nhóm an toàn hơn.
       </div>
     </div>
   );
@@ -367,9 +399,11 @@ const chatColumnLabels: Record<string, string> = {
   class_name: 'Tên lớp',
   currentGpa: 'GPA',
   current_gpa: 'GPA',
-  completedCredits: 'Tín chỉ tích lũy',
+  completedCredits: 'Hoàn thành tín chỉ',
   requiredCredits: 'Tổng tín chỉ',
-  debtCredits: 'Tín chỉ còn thiếu',
+  debtCredits: 'Nợ học lại',
+  academicStatus: 'Trạng thái học tập',
+  academic_status: 'Trạng thái học tập',
   completionRatio: 'Tỷ lệ hoàn thành',
   failedCourses: 'Số môn rớt',
   lowScoreCourses: 'Số môn điểm thấp',
@@ -465,6 +499,11 @@ function humanizeChatCell(key: string, value: unknown): string {
       if (normalized === 'medium') return 'Trung bình';
       if (normalized === 'low') return 'Thấp';
     }
+    if (key === 'academic_status' || key === 'academicStatus') {
+      if (normalized === 'graduated') return 'Đã tốt nghiệp';
+      if (normalized === 'delayed') return 'Chậm tiến độ';
+      if (normalized === 'studying') return 'Đang học';
+    }
     if (key === 'quadrant') {
       if (normalized === 'credit_low_gpa_low') return 'Tín chỉ thấp - GPA thấp';
       if (normalized === 'credit_low_gpa_ok') return 'Tín chỉ thấp - GPA tạm ổn';
@@ -553,11 +592,6 @@ function ChatResultPanel({ result, error, isPending }: { result?: ChatResult; er
             ),
           )}
         </div>
-        <div className="helper-line">
-          {result.llmEnabled
-            ? `Mô hình đang dùng: ${result.provider}${result.mode ? ` • Chế độ: ${result.mode}` : ''}`
-            : 'Nguồn dữ liệu: API /ai/chat-to-data'}
-        </div>
       </div>
 
       {result.visualization.type === 'bar_chart' ? <BarChart rows={result.rows} /> : null}
@@ -591,12 +625,114 @@ function ChatResultPanel({ result, error, isPending }: { result?: ChatResult; er
         </div>
       ) : null}
 
-      {result.sqlPreview ? (
-        <details className="sql-preview">
-          <summary>Xem trước truy vấn / SQL</summary>
-          <pre>{result.sqlPreview}</pre>
-        </details>
+    </div>
+  );
+}
+
+function AcademicProgressPanel({ report }: { report?: AcademicProgressResponse }) {
+  if (!report) {
+    return <p className="muted">Đang tải báo cáo tiến độ theo policy.</p>;
+  }
+
+  const statusLabel: Record<AcademicProgressResponse['termProgress'][number]['status'], string> = {
+    normal: 'Bình thường',
+    delayed: 'Chậm tiến độ',
+    in_progress_warning: 'Cần đăng ký thêm',
+  };
+
+  return (
+    <div className="academic-policy-card">
+      <div className="policy-summary">
+        <div>
+          <span className="metric-label">Ngành/hệ xác định</span>
+          <strong>{report.identification.programName}</strong>
+          <p>{report.identification.trainingSystem}</p>
+        </div>
+        <div>
+          <span className="metric-label">Căn cứ policy</span>
+          <p>{report.identification.evidence}</p>
+        </div>
+      </div>
+
+      {!report.baseline.timelineAvailable ? (
+        <div className="policy-alert">
+          <strong>Chưa đủ baseline chương trình</strong>
+          <p>{report.baseline.note}</p>
+        </div>
       ) : null}
+
+      <div className="table-shell compact">
+        <table>
+          <thead>
+            <tr>
+              <th>Học kỳ</th>
+              <th>TC đăng ký</th>
+              <th>TC đạt</th>
+              <th>Lũy kế</th>
+              <th>Trạng thái</th>
+            </tr>
+          </thead>
+          <tbody>
+            {report.termProgress.map((term) => (
+              <tr key={term.termCode}>
+                <td>
+                  <strong>HK{term.termIndex}</strong>
+                  <span>{term.termName}</span>
+                </td>
+                <td>{term.registeredCredits}</td>
+                <td>{term.passedCredits}</td>
+                <td>{term.cumulativePassedCredits}</td>
+                <td>
+                  <span className={`policy-status ${term.status}`}>{statusLabel[term.status]}</span>
+                  <p className="cell-note">{term.reason}</p>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="policy-grid">
+        <div>
+          <h4>Môn nợ</h4>
+          {report.failedCourses.length ? (
+            <ul className="policy-list">
+              {report.failedCourses.map((course) => (
+                <li key={`${course.termCode}-${course.courseCode}`}>
+                  <strong>{course.courseName}</strong>
+                  <span>
+                    {course.credits} TC • Điểm {formatScore(course.finalScore, 1)} • {course.letterGrade}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">Không có môn nào bị rớt.</p>
+          )}
+        </div>
+
+        <div>
+          <h4>HK hiện tại</h4>
+          <p className="registration-callout">
+            Đang ghi nhận <strong>{report.currentRegistration.currentCredits} TC</strong>. Cần thêm{' '}
+            <strong>{report.currentRegistration.additionalCreditsNeeded} TC</strong> để đạt ngưỡng{' '}
+            {report.currentRegistration.minimumCredits} TC.
+          </p>
+          <div className="suggestion-list">
+            {report.currentRegistration.suggestedCourses.slice(0, 4).map((course) => (
+              <span key={`${course.group}-${course.code ?? course.name}`}>
+                {course.code ? `${course.code} - ` : ''}
+                {course.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="policy-alert subtle">
+        <strong>Môn chậm/chưa học</strong>
+        <p>{report.missingCourses.note}</p>
+      </div>
     </div>
   );
 }
@@ -640,6 +776,12 @@ function DashboardPage() {
   const dashboard = useQuery({
     queryKey: ['dashboard', selectedMssv],
     queryFn: () => apiFetch<DashboardResponse>(`/students/${selectedMssv}/dashboard`),
+    enabled: hasToken && !!selectedMssv,
+  });
+
+  const academicProgress = useQuery({
+    queryKey: ['academic-progress', selectedMssv],
+    queryFn: () => apiFetch<AcademicProgressResponse>(`/students/${selectedMssv}/academic-progress`),
     enabled: hasToken && !!selectedMssv,
   });
 
@@ -720,6 +862,7 @@ function DashboardPage() {
     (overview.error instanceof Error && overview.error.message) ||
     (students.error instanceof Error && students.error.message) ||
     (dashboard.error instanceof Error && dashboard.error.message) ||
+    (academicProgress.error instanceof Error && academicProgress.error.message) ||
     (riskStudents.error instanceof Error && riskStudents.error.message) ||
     (matrix.error instanceof Error && matrix.error.message);
 
@@ -733,10 +876,6 @@ function DashboardPage() {
         <div>
           <div className="eyebrow">CVHT Dashboard 2.0</div>
           <h1>AI Co-Advisor cho truy vấn, cảnh báo bất thường và dự báo học vụ</h1>
-          <p>
-            Tập trung vào 3 luồng việc: hỏi dữ liệu bằng tiếng Việt, nhận AI Brief mỗi khi có biến động điểm
-            và ưu tiên can thiệp theo Delay Risk Score.
-          </p>
         </div>
         <button
           className="ghost-button"
@@ -786,24 +925,26 @@ function DashboardPage() {
         <div className="panel chat-panel">
           <div className="panel-heading">
             <div>
-              <div className="eyebrow">Chat-to-Data / Text-to-SQL</div>
+              <div className="eyebrow">Trợ lý AI</div>
               <h2>Trợ lý ảo học vụ</h2>
             </div>
           </div>
-          <textarea
-            value={chatPrompt}
-            onChange={(e) => setChatPrompt(e.target.value)}
-            placeholder="Hỏi dữ liệu hoặc xin tư vấn học vụ: top GPA, phổ điểm, kế hoạch can thiệp, mẫu nhắn nhắc học..."
-          />
-          <div className="prompt-strip">
-            {prompts.map((prompt) => (
-              <button key={prompt} className="chip" onClick={() => setChatPrompt(prompt)}>
-                {prompt}
-              </button>
-            ))}
+          <div className="chat-composer">
+            <textarea
+              value={chatPrompt}
+              onChange={(e) => setChatPrompt(e.target.value)}
+              placeholder="Đặt câu hỏi về học vụ, rủi ro, phổ điểm hoặc kế hoạch can thiệp..."
+            />
+            <div className="prompt-strip" aria-label="Gợi ý truy vấn nhanh">
+              {prompts.map((prompt) => (
+                <button key={prompt} className="chip" onClick={() => setChatPrompt(prompt)}>
+                  {prompt}
+                </button>
+              ))}
+            </div>
           </div>
           <button
-            className="primary-button"
+            className="primary-button action-button"
             onClick={() => chatMutation.mutate(chatPrompt.trim())}
             disabled={chatMutation.isPending || !chatPrompt.trim()}
           >
@@ -854,9 +995,9 @@ function DashboardPage() {
 
       <section className="panel">
         <div className="panel-heading">
-            <div>
-              <div className="eyebrow">Predictive Analytics</div>
-              <h2>Ma trận rủi ro sinh viên</h2>
+          <div>
+            <div className="eyebrow">Predictive Analytics</div>
+            <h2>Ma trận rủi ro sinh viên</h2>
           </div>
           <div className="class-switcher">
             {classes.data?.map((classItem) => (
@@ -875,9 +1016,6 @@ function DashboardPage() {
             ))}
           </div>
         </div>
-        <p className="section-copy">
-          Chấm đỏ nhấp nháy nằm trong vùng tín chỉ thấp và GPA thấp, cần được CVHT ưu tiên can thiệp.
-        </p>
         <MatrixChart matrix={matrix.data} />
       </section>
 
@@ -888,7 +1026,7 @@ function DashboardPage() {
               <div className="eyebrow">Khám phá lớp</div>
               <h2>{selectedClassCode || 'Chọn lớp'}</h2>
             </div>
-            <span className="helper-line">{activeClassName || 'Danh sách sinh viên và điểm rủi ro'}</span>
+            <span className="section-meta">{activeClassName || 'Danh sách sinh viên và điểm rủi ro'}</span>
           </div>
           <div className="student-stack">
             {students.data?.map((student) => {
@@ -899,14 +1037,22 @@ function DashboardPage() {
                   className={`student-tile ${selectedMssv === student.mssv ? 'active' : ''}`}
                   onClick={() => setSelectedMssv(student.mssv)}
                 >
-                  <div>
-                    <strong>{student.full_name}</strong>
-                    <span>{student.mssv}</span>
+                  <div className="student-identity">
+                    <strong className="student-name">{student.full_name}</strong>
+                    <span className="student-code">{student.mssv}</span>
                   </div>
                   <div className="student-meta">
-                    <span>GPA {formatScore(student.current_gpa, 2)}</span>
-                    <span className={`risk-pill ${risk?.riskBand || 'low'}`}>
-                      {risk ? `${riskLabel(Number(risk.delayRiskScore))} ${formatScore(risk.delayRiskScore, 0, '0')}%` : 'Chưa có'}
+                    <span className="student-gpa">GPA {formatScore(student.current_gpa, 2)}</span>
+                    <span
+                      className={`risk-pill ${
+                        student.academic_status === 'graduated' ? 'graduated' : risk?.riskBand || 'low'
+                      }`}
+                    >
+                      {student.academic_status === 'graduated'
+                        ? 'Đã tốt nghiệp'
+                        : risk
+                          ? `${riskLabel(Number(risk.delayRiskScore))} ${formatScore(risk.delayRiskScore, 0, '0')}%`
+                          : 'Chưa có'}
                     </span>
                   </div>
                 </button>
@@ -942,9 +1088,13 @@ function DashboardPage() {
               <div className="detail-card">
                 <span>Tín chỉ</span>
                 <strong>
-                  {dashboard.data.creditProgress.completed} / {dashboard.data.creditProgress.required}
+                  Hoàn thành {dashboard.data.creditProgress.completed} / {dashboard.data.creditProgress.required}
                 </strong>
-                <p>Nợ {dashboard.data.creditProgress.debt} tín chỉ</p>
+                <p>
+                  {dashboard.data.creditProgress.debt > 0
+                    ? `Nợ học lại ${dashboard.data.creditProgress.debt} tín chỉ`
+                    : 'Không có nợ học lại'}
+                </p>
               </div>
               <div className="detail-card">
                 <span>Cảnh báo</span>
@@ -958,6 +1108,11 @@ function DashboardPage() {
 
           {dashboard.data ? (
             <>
+              <div className="subpanel">
+                <h3>Báo cáo tiến độ theo policy</h3>
+                <AcademicProgressPanel report={academicProgress.data} />
+              </div>
+
               <div className="subpanel">
                 <h3>Xu hướng điểm trung bình</h3>
                 <MiniTrend items={dashboard.data.gpaTrend} />
@@ -990,18 +1145,23 @@ function DashboardPage() {
                   ))}
                 </div>
                 <div className="note-form">
-                  <textarea
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    placeholder="Ghi nhận phương án can thiệp, lịch hẹn, khuyến nghị học tập..."
-                  />
-                  <button
-                    className="primary-button"
-                    disabled={!note.trim() || saveNote.isPending}
-                    onClick={() => saveNote.mutate()}
-                  >
-                    {saveNote.isPending ? 'Đang lưu...' : 'Lưu ghi chú can thiệp'}
-                  </button>
+                  <label className="note-form-field">
+                    <span>Kế hoạch can thiệp</span>
+                    <textarea
+                      value={note}
+                      onChange={(e) => setNote(e.target.value)}
+                      placeholder="Nhập nội dung kế hoạch can thiệp"
+                    />
+                  </label>
+                  <div className="note-form-actions">
+                    <button
+                      className="primary-button note-submit"
+                      disabled={!note.trim() || saveNote.isPending}
+                      onClick={() => saveNote.mutate()}
+                    >
+                      {saveNote.isPending ? 'Đang lưu...' : 'Lưu kế hoạch'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </>

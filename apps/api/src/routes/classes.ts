@@ -40,7 +40,12 @@ classesRouter.get('/:id/students', async (req: AuthRequest, res) => {
   }
 
   const rs = await pool.query(
-    'SELECT id, mssv, full_name, current_gpa::float8 AS current_gpa FROM students WHERE class_id = $1 ORDER BY mssv',
+    `
+      SELECT id, mssv, full_name, current_gpa::float8 AS current_gpa, academic_status
+      FROM students
+      WHERE class_id = $1
+      ORDER BY academic_status = 'graduated', mssv
+    `,
     [classId],
   );
 

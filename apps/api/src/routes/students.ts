@@ -4,6 +4,7 @@ import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { pool } from '../db/pool.js';
 import { canAccessStudent } from '../services/accessService.js';
 import { writeAuditLog } from '../services/auditService.js';
+import { buildAcademicProgressReport } from '../services/academicPolicyService.js';
 
 const NoteSchema = z.object({
   note: z.string().min(1).max(1000),
@@ -26,9 +27,10 @@ studentsRouter.get('/:mssv/dashboard', async (req: AuthRequest, res) => {
     mssv: string;
     full_name: string;
     class_code: string;
+    academic_status: string;
   }>(
     `
-      SELECT s.id, s.mssv, s.full_name, c.class_code
+      SELECT s.id, s.mssv, s.full_name, c.class_code, s.academic_status
       FROM students s
       JOIN classes c ON c.id = s.class_id
       WHERE s.mssv = $1
@@ -55,18 +57,33 @@ studentsRouter.get('/:mssv/dashboard', async (req: AuthRequest, res) => {
     [mssv],
   );
 
-  const creditProgress = await pool.query<{ completed: string; required: string }>(
+  const creditProgress = await pool.query<{ completed: string; required: string; debt: string }>(
     `
+      WITH target_student AS (
+        SELECT s.id, cl.required_credits
+        FROM students s
+        JOIN classes cl ON cl.id = s.class_id
+        WHERE s.mssv = $1
+      ),
+      course_state AS (
+        SELECT
+          c.course_code,
+          c.credits,
+          BOOL_OR(e.passed) AS has_passed,
+          BOOL_OR(e.passed = false OR e.final_score < 5) AS has_failed
+        FROM target_student ts
+        JOIN enrollments e ON e.student_id = ts.id
+        JOIN course_offerings co ON co.id = e.course_offering_id
+        JOIN courses c ON c.id = co.course_id
+        GROUP BY c.course_code, c.credits
+      )
       SELECT
-        COALESCE(SUM(CASE WHEN e.passed THEN c.credits ELSE 0 END), 0)::text AS completed,
-        cl.required_credits::text AS required
-      FROM students s
-      LEFT JOIN enrollments e ON e.student_id = s.id
-      LEFT JOIN course_offerings co ON co.id = e.course_offering_id
-      LEFT JOIN courses c ON c.id = co.course_id
-      JOIN classes cl ON cl.id = s.class_id
-      WHERE s.mssv = $1
-      GROUP BY s.id, cl.required_credits
+        COALESCE(SUM(CASE WHEN cs.has_passed THEN cs.credits ELSE 0 END), 0)::text AS completed,
+        MAX(ts.required_credits)::text AS required,
+        COALESCE(SUM(CASE WHEN cs.has_failed AND NOT cs.has_passed THEN cs.credits ELSE 0 END), 0)::text AS debt
+      FROM target_student ts
+      LEFT JOIN course_state cs ON true
+      GROUP BY ts.id
     `,
     [mssv],
   );
@@ -96,7 +113,7 @@ studentsRouter.get('/:mssv/dashboard', async (req: AuthRequest, res) => {
     resourceId: mssv,
   });
 
-  const credits = creditProgress.rows[0] ?? { completed: '0', required: '0' };
+  const credits = creditProgress.rows[0] ?? { completed: '0', required: '0', debt: '0' };
 
   res.json({
     student: student.rows[0],
@@ -104,7 +121,7 @@ studentsRouter.get('/:mssv/dashboard', async (req: AuthRequest, res) => {
     creditProgress: {
       completed: Number(credits.completed),
       required: Number(credits.required),
-      debt: Math.max(0, Number(credits.required) - Number(credits.completed)),
+      debt: Number(credits.debt),
     },
     alerts: alerts.rows,
     notes: notes.rows,
@@ -139,6 +156,30 @@ studentsRouter.get('/:mssv/alerts', async (req: AuthRequest, res) => {
   );
 
   res.json(rs.rows);
+});
+
+studentsRouter.get('/:mssv/academic-progress', async (req: AuthRequest, res) => {
+  const { mssv } = req.params;
+  const allowed = await canAccessStudent(req, mssv);
+  if (!allowed) {
+    res.status(403).json({ message: 'Forbidden' });
+    return;
+  }
+
+  const report = await buildAcademicProgressReport(mssv);
+  if (!report) {
+    res.status(404).json({ message: 'Student not found' });
+    return;
+  }
+
+  await writeAuditLog({
+    userId: req.user?.userId,
+    action: 'VIEW_ACADEMIC_PROGRESS',
+    resourceType: 'STUDENT',
+    resourceId: mssv,
+  });
+
+  res.json(report);
 });
 
 studentsRouter.post('/:mssv/notes', async (req: AuthRequest, res) => {

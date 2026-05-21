@@ -101,6 +101,59 @@ function validateGeneratedSql(sql: string): string | null {
   return null;
 }
 
+function normalizeGeneratedSql(sql: string): string {
+  return sql.replace(
+    /ROUND\s*\(\s*AVG\(([^()]+)\)\s*,\s*(\d+)\s*\)/gi,
+    'ROUND(AVG($1)::numeric, $2)',
+  );
+}
+
+function dedupeIdenticalRows(rows: unknown[]): unknown[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = JSON.stringify(row);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function extractSqlLimit(sql: string): number | null {
+  const match = sql.match(/\blimit\s+(\d+)\b/i);
+  return match ? Number(match[1]) : null;
+}
+
+function normalizeRankedRows(rows: unknown[], sql: string): unknown[] {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return rows;
+  }
+
+  const lowerSql = sql.toLowerCase();
+  const limit = extractSqlLimit(sql) ?? rows.length;
+
+  if (lowerSql.includes('order by') && lowerSql.includes('current_gpa')) {
+    const sorted = [...rows].sort((left, right) => {
+      const a = Number((left as { current_gpa?: number }).current_gpa ?? Number.NEGATIVE_INFINITY);
+      const b = Number((right as { current_gpa?: number }).current_gpa ?? Number.NEGATIVE_INFINITY);
+      return lowerSql.includes('current_gpa desc') ? b - a : a - b;
+    });
+    return sorted.slice(0, limit);
+  }
+
+  if (lowerSql.includes('order by') && lowerSql.includes('delay_risk_score')) {
+    const sorted = [...rows].sort((left, right) => {
+      const a = Number((left as { delay_risk_score?: number }).delay_risk_score ?? Number.NEGATIVE_INFINITY);
+      const b = Number((right as { delay_risk_score?: number }).delay_risk_score ?? Number.NEGATIVE_INFINITY);
+      return lowerSql.includes('delay_risk_score desc') ? b - a : a - b;
+    });
+    return sorted.slice(0, limit);
+  }
+
+  return rows;
+}
+
 function llmPrompt(): string {
   return `
 Bạn là chuyên gia chuyển câu hỏi tiếng Việt sang SQL PostgreSQL.
@@ -113,14 +166,19 @@ Ràng buộc bắt buộc:
 - BẮT BUỘC có LIMIT <= 200.
 - CHỈ được truy vấn duy nhất từ bảng ảo "scoped_data".
 - Không truy cập bảng nào khác.
+- Nếu câu hỏi đang liệt kê sinh viên/lớp theo thông tin ở cấp sinh viên như GPA, MSSV, họ tên, lớp mà không hỏi theo từng môn/học phần, hãy dùng DISTINCT hoặc DISTINCT ON(student_id) để tránh lặp một sinh viên thành nhiều dòng.
 
 Schema bảng ảo scoped_data:
 - student_id: uuid
 - mssv: text
 - full_name: text
 - current_gpa: number
+- academic_status: text -- studying | delayed | graduated
 - class_code: text
 - class_name: text
+- completed_credits: number
+- required_credits: number
+- debt_credits: number -- chỉ tính môn đã rớt và chưa học lại qua
 - advisor_user_id: uuid
 - term_code: text | null
 - course_code: text | null
@@ -138,6 +196,8 @@ Schema bảng ảo scoped_data:
 Quy ước ánh xạ ngôn ngữ tự nhiên:
 - "rớt môn", "không đạt", "trượt" => passed = false
 - "học lại" => is_retake = true
+- "nợ tín chỉ", "nợ học lại" => debt_credits
+- "hoàn thành tín chỉ", "đã đạt bao nhiêu tín chỉ" => completed_credits và required_credits
 - "nguy cơ học vụ cao" => risk_band IN ('high', 'critical') hoặc delay_risk_score >= 55
 - "nguy cấp" => risk_band = 'critical' hoặc delay_risk_score >= 75
 - "lớp ATTT-K18A" => class_code = 'ATTT-K18A'
@@ -160,6 +220,45 @@ Nhiệm vụ:
 `;
 }
 
+function isTrollLlmProvider(): boolean {
+  const provider = env.LLM_PROVIDER?.toLowerCase();
+  const baseUrl = env.LLM_BASE_URL?.toLowerCase() ?? '';
+  return provider === 'trollllm' || baseUrl.includes('trollllm.xyz');
+}
+
+function trollLlmSqlPrompt(question: string): string {
+  return [
+    'Bạn là bộ chuyển đổi câu hỏi tiếng Việt sang SQL PostgreSQL.',
+    'Chỉ trả về DUY NHẤT một JSON hợp lệ, không thêm giải thích ngoài JSON.',
+    'Schema bắt buộc: {"sql":"SELECT ...","explanation":"..."}',
+    'Ràng buộc:',
+    '- Chỉ SELECT read-only.',
+    '- Không dùng dấu chấm phẩy.',
+    '- Bắt buộc có LIMIT <= 200.',
+    '- Chỉ được truy vấn từ bảng ảo scoped_data.',
+    '- Chỉ dùng đúng các cột: student_id, mssv, full_name, current_gpa, academic_status, class_code, class_name, completed_credits, required_credits, debt_credits, advisor_user_id, term_code, course_code, course_name, attempt_no, midterm_score, final_score, passed, is_retake, delay_risk_score, risk_band, quadrant, recommended_action.',
+    '- Nếu chỉ liệt kê sinh viên theo thông tin cấp sinh viên như MSSV, họ tên, GPA, lớp mà không hỏi theo từng môn, phải dùng DISTINCT hoặc DISTINCT ON(student_id) để tránh trùng dòng.',
+    '- "rớt môn"/"không đạt"/"trượt" => passed = false.',
+    '- "học lại" => is_retake = true.',
+    '- "nợ tín chỉ"/"nợ học lại" => debt_credits.',
+    '- "hoàn thành tín chỉ"/"đã đạt bao nhiêu tín chỉ" => completed_credits và required_credits.',
+    "- \"nguy cơ học vụ cao\" => risk_band IN ('high','critical') hoặc delay_risk_score >= 55.",
+    "- \"nguy cấp\" => risk_band = 'critical' hoặc delay_risk_score >= 75.",
+    '- Không tự bịa tên cột tiếng Việt.',
+    `Câu hỏi: ${question}`,
+  ].join('\n');
+}
+
+function trollLlmJsonRepairPrompt(question: string, rawContent: string): string {
+  return [
+    'Hãy sửa đầu ra sau thành DUY NHẤT một JSON hợp lệ theo schema {"sql":"SELECT ...","explanation":"..."}.',
+    'Nếu đầu ra cũ không có JSON hợp lệ, hãy tự suy ra JSON tốt nhất từ câu hỏi gốc.',
+    'Ràng buộc: chỉ SELECT, không dấu chấm phẩy, phải có LIMIT <= 200, chỉ truy vấn scoped_data.',
+    `Câu hỏi gốc: ${question}`,
+    `Đầu ra cũ: ${rawContent}`,
+  ].join('\n');
+}
+
 function inferChatMode(message: string, requestedMode: ChatMode): Exclude<ChatMode, 'auto'> {
   if (requestedMode === 'assistant' || requestedMode === 'data') {
     return requestedMode;
@@ -175,32 +274,55 @@ async function callOpenAiForSql(question: string): Promise<LlmSqlResult> {
   const apiKey = env.OPENAI_API_KEY || env.LLM_API_KEY;
   const model = env.OPENAI_MODEL || env.LLM_MODEL;
   const baseUrl = (env.OPENAI_BASE_URL || env.LLM_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+  const trollCompat = isTrollLlmProvider();
   if (!apiKey) {
     throw new Error('MISSING_API_KEY');
   }
 
-  const requestPayload = (useJsonResponseFormat: boolean) => ({
-    model,
-    temperature: 0,
-    ...(useJsonResponseFormat ? { response_format: { type: 'json_object' as const } } : {}),
-    messages: [
-      { role: 'system' as const, content: llmPrompt() },
-      { role: 'user' as const, content: question },
-    ],
-  });
+  const requestPayload = (useJsonResponseFormat: boolean, overrideMessages?: Array<{ role: 'system' | 'user'; content: string }>) => {
+    if (trollCompat) {
+      return {
+        model,
+        temperature: 0,
+        messages:
+          overrideMessages ??
+          [{ role: 'user' as const, content: trollLlmSqlPrompt(question) }],
+      };
+    }
+    return {
+      model,
+      temperature: 0,
+      ...(useJsonResponseFormat ? { response_format: { type: 'json_object' as const } } : {}),
+      messages:
+        overrideMessages ??
+        [
+          { role: 'system' as const, content: llmPrompt() },
+          { role: 'user' as const, content: question },
+        ],
+    };
+  };
 
-  const sendRequest = (useJsonResponseFormat: boolean) =>
-    fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestPayload(useJsonResponseFormat)),
-    });
+  const sendRequest = async (
+    useJsonResponseFormat: boolean,
+    overrideMessages?: Array<{ role: 'system' | 'user'; content: string }>,
+  ) => {
+    try {
+      return await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestPayload(useJsonResponseFormat, overrideMessages)),
+      });
+    } catch (error) {
+      logger.error({ error, providerBaseUrl: baseUrl }, 'OpenAI-compatible fetch failed');
+      throw new Error('OPENAI_API_ERROR');
+    }
+  };
 
   let resp = await sendRequest(true);
-  if (!resp.ok && resp.status >= 500) {
+  if (!trollCompat && !resp.ok && resp.status >= 500) {
     logger.warn(
       { status: resp.status, providerBaseUrl: baseUrl },
       'OpenAI-compatible provider failed with response_format=json_object, retrying without structured response hint',
@@ -228,15 +350,41 @@ async function callOpenAiForSql(question: string): Promise<LlmSqlResult> {
     throw new Error('OPENAI_EMPTY_RESPONSE');
   }
 
-  const parsed = z
-    .object({
-      sql: z.string().min(1),
-      explanation: z.string().min(1).max(1200).optional().default(''),
-    })
-    .parse(parseModelJson(content));
+  const sqlResultSchema = z.object({
+    sql: z.string().min(1),
+    explanation: z.string().min(1).max(1200).optional().default(''),
+  });
+
+  let parsedPayload: { sql: string; explanation?: string };
+  try {
+    parsedPayload = parseModelJson(content);
+  } catch (error) {
+    if (!trollCompat) {
+      throw error;
+    }
+    logger.warn({ model, rawContent: content }, 'trollllm returned non-JSON SQL payload, retrying with repair prompt');
+    const repairResp = await sendRequest(false, [
+      { role: 'user', content: trollLlmJsonRepairPrompt(question, content) },
+    ]);
+    if (!repairResp.ok) {
+      const errText = await repairResp.text();
+      logger.error({ status: repairResp.status, errText }, 'trollllm JSON repair call failed');
+      throw new Error('OPENAI_API_ERROR');
+    }
+    const repairData = (await repairResp.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const repairedContent = repairData.choices?.[0]?.message?.content;
+    if (!repairedContent) {
+      throw new Error('OPENAI_EMPTY_RESPONSE');
+    }
+    parsedPayload = parseModelJson(repairedContent);
+  }
+
+  const parsed = sqlResultSchema.parse(parsedPayload);
 
   return {
-    sql: cleanSql(parsed.sql),
+    sql: normalizeGeneratedSql(cleanSql(parsed.sql)),
     explanation: parsed.explanation,
     model,
     provider: 'openai',
@@ -307,7 +455,7 @@ async function callGeminiForSql(question: string): Promise<LlmSqlResult> {
     .parse(parseModelJson(content));
 
   return {
-    sql: cleanSql(parsed.sql),
+    sql: normalizeGeneratedSql(cleanSql(parsed.sql)),
     explanation: parsed.explanation,
     model,
     provider: 'gemini',
@@ -570,24 +718,40 @@ function buildStudentsRiskQuery(req: AuthRequest, classCode?: string): ScopedQue
   }
 
   const sql = `
-    WITH agg AS (
+    WITH course_state AS (
       SELECT
         s.id AS student_id,
-        s.mssv,
-        s.full_name,
-        c.class_code,
-        s.current_gpa,
-        c.required_credits,
-        COALESCE(SUM(CASE WHEN e.passed THEN cr.credits ELSE 0 END), 0) AS completed_credits,
-        SUM(CASE WHEN e.passed = false THEN 1 ELSE 0 END) AS failed_courses,
-        SUM(CASE WHEN e.final_score < 5 THEN 1 ELSE 0 END) AS low_score_courses
+        cr.course_code,
+        cr.credits,
+        BOOL_OR(e.passed) AS has_passed,
+        BOOL_OR(e.passed = false OR e.final_score < 5) AS has_failed,
+        MIN(e.final_score) AS min_score
       FROM students s
       JOIN classes c ON c.id = s.class_id
       LEFT JOIN enrollments e ON e.student_id = s.id
       LEFT JOIN course_offerings co ON co.id = e.course_offering_id
       LEFT JOIN courses cr ON cr.id = co.course_id
       WHERE ${where.join(' AND ')}
-      GROUP BY s.id, s.mssv, s.full_name, c.class_code, s.current_gpa, c.required_credits
+      GROUP BY s.id, cr.course_code, cr.credits
+    ),
+    agg AS (
+      SELECT
+        s.id AS student_id,
+        s.mssv,
+        s.full_name,
+        c.class_code,
+        s.current_gpa,
+        s.academic_status,
+        c.required_credits,
+        COALESCE(SUM(CASE WHEN cs.has_passed THEN cs.credits ELSE 0 END), 0) AS completed_credits,
+        COALESCE(SUM(CASE WHEN cs.has_failed AND NOT cs.has_passed THEN cs.credits ELSE 0 END), 0) AS debt_credits,
+        COALESCE(SUM(CASE WHEN cs.has_failed AND NOT cs.has_passed THEN 1 ELSE 0 END), 0) AS failed_courses,
+        COALESCE(SUM(CASE WHEN cs.min_score < 5 THEN 1 ELSE 0 END), 0) AS low_score_courses
+      FROM students s
+      JOIN classes c ON c.id = s.class_id
+      LEFT JOIN course_state cs ON cs.student_id = s.id
+      WHERE ${where.join(' AND ')}
+      GROUP BY s.id, s.mssv, s.full_name, c.class_code, s.current_gpa, s.academic_status, c.required_credits
     ),
     latest_risk AS (
       SELECT DISTINCT ON (student_id)
@@ -605,9 +769,10 @@ function buildStudentsRiskQuery(req: AuthRequest, classCode?: string): ScopedQue
       a.full_name AS "fullName",
       a.class_code AS "classCode",
       a.current_gpa AS "currentGpa",
+      a.academic_status AS "academicStatus",
       a.completed_credits AS "completedCredits",
       a.required_credits AS "requiredCredits",
-      GREATEST(a.required_credits - a.completed_credits, 0) AS "debtCredits",
+      a.debt_credits AS "debtCredits",
       ROUND((a.completed_credits::numeric / NULLIF(a.required_credits, 0)) * 100, 2) AS "completionRatio",
       a.failed_courses AS "failedCourses",
       a.low_score_courses AS "lowScoreCourses",
@@ -638,6 +803,7 @@ aiRouter.get('/overview', async (req: AuthRequest, res) => {
     fullName: string;
     classCode: string;
     currentGpa: string;
+    academicStatus: string;
     completedCredits: string;
     requiredCredits: string;
     debtCredits: string;
@@ -656,6 +822,7 @@ aiRouter.get('/overview', async (req: AuthRequest, res) => {
     fullName: r.fullName,
     classCode: r.classCode,
     currentGpa: Number(r.currentGpa),
+    academicStatus: r.academicStatus,
     completedCredits: Number(r.completedCredits),
     requiredCredits: Number(r.requiredCredits),
     debtCredits: Number(r.debtCredits),
@@ -860,14 +1027,41 @@ aiRouter.post('/chat-to-data', async (req: AuthRequest, res) => {
         recommended_action
       FROM risk_snapshots
       ORDER BY student_id, created_at DESC
+    ),
+    course_state AS (
+      SELECT
+        s.id AS student_id,
+        cr.course_code,
+        cr.credits,
+        BOOL_OR(e.passed) AS has_passed,
+        BOOL_OR(e.passed = false OR e.final_score < 5) AS has_failed
+      FROM students s
+      JOIN classes c ON c.id = s.class_id
+      LEFT JOIN enrollments e ON e.student_id = s.id
+      LEFT JOIN course_offerings co ON co.id = e.course_offering_id
+      LEFT JOIN courses cr ON cr.id = co.course_id
+      WHERE ${scope.sql}
+      GROUP BY s.id, cr.course_code, cr.credits
+    ),
+    credit_summary AS (
+      SELECT
+        student_id,
+        COALESCE(SUM(CASE WHEN has_passed THEN credits ELSE 0 END), 0) AS completed_credits,
+        COALESCE(SUM(CASE WHEN has_failed AND NOT has_passed THEN credits ELSE 0 END), 0) AS debt_credits
+      FROM course_state
+      GROUP BY student_id
     )
     SELECT
       s.id AS student_id,
       s.mssv,
       s.full_name,
       s.current_gpa::float8 AS current_gpa,
+      s.academic_status,
       c.class_code,
       c.class_name,
+      COALESCE(cred.completed_credits, 0)::float8 AS completed_credits,
+      c.required_credits::float8 AS required_credits,
+      COALESCE(cred.debt_credits, 0)::float8 AS debt_credits,
       c.advisor_user_id,
       t.term_code,
       cr.course_code,
@@ -888,6 +1082,7 @@ aiRouter.post('/chat-to-data', async (req: AuthRequest, res) => {
     LEFT JOIN courses cr ON cr.id = co.course_id
     LEFT JOIN terms t ON t.id = co.term_id
     LEFT JOIN latest_risk lr ON lr.student_id = s.id
+    LEFT JOIN credit_summary cred ON cred.student_id = s.id
     WHERE ${scope.sql}
   `;
 
@@ -1003,13 +1198,14 @@ aiRouter.post('/chat-to-data', async (req: AuthRequest, res) => {
     await client.query("SET LOCAL statement_timeout = '5000ms'");
     const queryResult = await client.query(finalSql, scope.params);
     await client.query('COMMIT');
+    const rows = normalizeRankedRows(dedupeIdenticalRows(queryResult.rows), llmResult.sql);
 
     res.json({
       mode: 'data',
       message: body.message,
-      answer: llmResult.explanation || `Đã trả về ${queryResult.rows.length} dòng dữ liệu.`,
+      answer: llmResult.explanation || `Đã trả về ${rows.length} dòng dữ liệu.`,
       sqlPreview: llmResult.sql,
-      rows: queryResult.rows,
+      rows,
       visualization: { type: 'table' },
       llmEnabled: true,
       provider: `${llmResult.provider}:${llmResult.model}`,
