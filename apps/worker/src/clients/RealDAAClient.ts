@@ -1,11 +1,5 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { DAAClient, DAAPayload } from './DAAClient.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const PayloadSchema = z.object({
   sourceName: z.string(),
@@ -29,10 +23,22 @@ const PayloadSchema = z.object({
   ),
 });
 
-export class MockDAAClient implements DAAClient {
+export class RealDAAClient implements DAAClient {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly apiToken?: string,
+  ) {}
+
   async fetchSnapshot(): Promise<DAAPayload> {
-    const fixturePath = path.resolve(__dirname, '../fixtures/mock-daa.json');
-    const raw = await fs.readFile(fixturePath, 'utf-8');
-    return PayloadSchema.parse(JSON.parse(raw));
+    const normalizedBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
+    const res = await fetch(`${normalizedBaseUrl}/daa-demo/api/snapshot`, {
+      headers: this.apiToken ? { 'X-DAA-Token': this.apiToken } : {},
+    });
+
+    if (!res.ok) {
+      throw new Error(`DAA fetch failed with HTTP ${res.status}`);
+    }
+
+    return PayloadSchema.parse(await res.json());
   }
 }

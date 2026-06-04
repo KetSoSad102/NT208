@@ -12,7 +12,7 @@ export async function runAnalytics(): Promise<void> {
   await pool.query(`DELETE FROM risk_snapshots WHERE generated_by = 'RULE'`);
 
   const rs = await pool.query<{ student_id: string; term_code: string; gpa: number }>(`
-    SELECT s.id AS student_id, t.term_code, AVG(e.final_score) AS gpa
+    SELECT s.id AS student_id, t.term_code, AVG(COALESCE(e.overall_score, e.final_score)) AS gpa
     FROM students s
     JOIN enrollments e ON e.student_id = s.id
     JOIN course_offerings co ON co.id = e.course_offering_id
@@ -54,7 +54,7 @@ export async function runAnalytics(): Promise<void> {
       c.required_credits::float AS required_credits,
       COALESCE(SUM(CASE WHEN e.passed THEN cr.credits ELSE 0 END), 0)::float AS completed_credits,
       COALESCE(SUM(CASE WHEN e.passed = FALSE THEN 1 ELSE 0 END), 0)::int AS failed_courses,
-      COALESCE(SUM(CASE WHEN e.final_score < 5 THEN 1 ELSE 0 END), 0)::int AS low_score_courses
+      COALESCE(SUM(CASE WHEN COALESCE(e.overall_score, e.final_score) < 5 THEN 1 ELSE 0 END), 0)::int AS low_score_courses
     FROM students s
     JOIN classes c ON c.id = s.class_id
     LEFT JOIN enrollments e ON e.student_id = s.id

@@ -184,19 +184,22 @@ function completedTermsForCohort(cohort: number): number {
   return 9;
 }
 
-function profileFor(mssv: string, cohort: number): Profile {
-  const value = hashString(`${mssv}-profile`) % 100;
-  if (cohort === 2021 && value < 24) return 'slow';
-  if (value < 8) return 'risky';
-  if (value < 24) return 'slow';
-  if (value < 68) return 'normal';
-  return 'strong';
+function riskQuotaForClass(classCode: string, classSize: number): number {
+  const cap = Math.min(10, classSize);
+  return 1 + (hashString(`${classCode}-risk-quota`) % cap);
+}
+
+function profileForClassRank(classCode: string, rank: number, riskQuota: number): Profile {
+  if (rank <= riskQuota) {
+    return hashString(`${classCode}-${rank}-risk-depth`) % 3 === 0 ? 'risky' : 'slow';
+  }
+  return hashString(`${classCode}-${rank}-profile`) % 100 < 36 ? 'strong' : 'normal';
 }
 
 function initialAcademicStatus(mssv: string, cohort: number, profile: Profile): AcademicStatus {
   const value = hashString(`${mssv}-status`) % 100;
-  if (cohort === 2021 && profile !== 'risky' && value < 62) return 'graduated';
-  if (cohort === 2022 && profile === 'strong' && value < 8) return 'graduated';
+  if (cohort === 2021 && profile !== 'slow' && profile !== 'risky') return value < 72 ? 'graduated' : 'studying';
+  if (cohort === 2022 && profile === 'strong' && value < 6) return 'graduated';
   if (cohort === 2021 || profile === 'slow' || profile === 'risky') return 'delayed';
   return 'studying';
 }
@@ -211,18 +214,19 @@ function scoreFor(student: StudentSeed, course: CourseSpec, attemptNo: number): 
 
 function shouldFail(student: StudentSeed, course: CourseSpec): boolean {
   if (student.academicStatus === 'graduated') return false;
+  if (student.profile === 'strong' || student.profile === 'normal') return false;
   const base =
-    student.profile === 'risky' ? 30 : student.profile === 'slow' ? 18 : student.profile === 'normal' ? 6 : 2;
-  const difficultyBoost = Math.round((course.difficulty ?? 0) * 12);
+    student.profile === 'risky' ? 7 : 3;
+  const difficultyBoost = Math.round((course.difficulty ?? 0) * 3);
   return hashString(`${student.mssv}-${course.code}-fail`) % 100 < base + difficultyBoost;
 }
 
 function shouldSkip(student: StudentSeed, course: CourseSpec, availableTerms: number): boolean {
   if (student.academicStatus === 'graduated') return false;
   if (course.term > availableTerms) return true;
-  const base =
-    student.profile === 'risky' ? 24 : student.profile === 'slow' ? 16 : student.profile === 'normal' ? 5 : 2;
-  const seniorBoost = student.cohort === 2021 ? 8 : 0;
+  if (student.profile === 'strong' || student.profile === 'normal') return false;
+  const base = student.profile === 'risky' ? 13 : 7;
+  const seniorBoost = student.cohort === 2021 ? 4 : 0;
   return hashString(`${student.mssv}-${course.code}-skip`) % 100 < base + seniorBoost;
 }
 
@@ -231,11 +235,12 @@ function programRequiredCredits(program: ProgramCode): number {
 }
 
 function makeFullName(seed: string): string {
-  const lastNames = ['Nguyễn', 'Trần', 'Lê', 'Phạm', 'Hoàng', 'Phan', 'Vũ', 'Đặng', 'Bùi', 'Đỗ', 'Hồ', 'Mai'];
-  const middleNames = ['Minh', 'Ngọc', 'Thanh', 'Đức', 'Thu', 'Quang', 'Anh', 'Gia', 'Bảo', 'Hải', 'Khánh', 'Nhật'];
-  const firstNames = ['An', 'Bình', 'Chi', 'Dũng', 'Giang', 'Huy', 'Khánh', 'Linh', 'Nam', 'Phương', 'Thảo', 'Vy'];
+  const lastNames = ['Nguyễn', 'Trần', 'Lê', 'Phạm', 'Hoàng', 'Phan', 'Vũ', 'Đặng', 'Bùi', 'Đỗ', 'Hồ', 'Mai', 'Huỳnh', 'Võ', 'Dương', 'Lý'];
+  const middleNames = ['Minh', 'Ngọc', 'Thanh', 'Đức', 'Thu', 'Quang', 'Anh', 'Gia', 'Bảo', 'Hải', 'Khánh', 'Nhật', 'Hoài', 'Tấn', 'Kim', 'Tuấn'];
+  const firstNames = ['An', 'Bình', 'Chi', 'Dũng', 'Giang', 'Huy', 'Khánh', 'Linh', 'Nam', 'Phương', 'Thảo', 'Vy', 'Khoa', 'Tâm', 'Nhi', 'Long', 'Trí', 'My'];
+  const secondFirstNames = ['Minh', 'Anh', 'Bảo', 'Gia', 'Hữu', 'Khánh', 'Nhật', 'Quốc', 'Thành', 'Tuệ'];
   const h = hashString(seed);
-  return `${lastNames[h % lastNames.length]} ${middleNames[(h + 5) % middleNames.length]} ${firstNames[(h + 9) % firstNames.length]}`;
+  return `${lastNames[h % lastNames.length]} ${middleNames[(h + 5) % middleNames.length]} ${secondFirstNames[(h + 11) % secondFirstNames.length]} ${firstNames[(h + 17) % firstNames.length]}`;
 }
 
 async function batchInsert(
@@ -301,7 +306,11 @@ function buildClasses(advisorCount: number): ClassSeed[] {
   return classes;
 }
 
-function makeMssv(classSeed: ClassSeed, index: number): string {
+function makeMssv(cohort: number, index: number): string {
+  return `${String(cohort).slice(-2)}52${String(index).padStart(4, '0')}`;
+}
+
+function oldClassStyleMssv(classSeed: ClassSeed, index: number): string {
   const yy = String(classSeed.cohort).slice(-2);
   const programPart = classSeed.program === 'ATTT' ? (classSeed.training === 'Tài năng' ? 'AN' : 'AT') : 'MM';
   const codeParts = classSeed.code.split('.');
@@ -310,45 +319,70 @@ function makeMssv(classSeed: ClassSeed, index: number): string {
 }
 
 function buildStudents(classRows: Array<ClassSeed & { id: string }>): StudentSeed[] {
-  const students: StudentSeed[] = [];
+  const drafts: Array<Omit<StudentSeed, 'mssv' | 'profile' | 'academicStatus'> & { classRank: number; riskQuota: number; sortKey: string }> = [];
   for (const classSeed of classRows) {
     const count = classSeed.training === 'Tài năng' ? 30 : 70;
+    const classDrafts: Array<Omit<StudentSeed, 'mssv' | 'profile' | 'academicStatus'> & { originalIndex: number }> = [];
     for (let index = 1; index <= count; index += 1) {
-      if (classSeed.code === 'ATTN2024' && index === 1) {
-        students.push({
-          mssv: '24520349',
-          fullName: 'Phan Lâm Dũng',
-          classCode: classSeed.code,
-          classId: classSeed.id,
-          program: classSeed.program,
-          training: classSeed.training,
-          cohort: classSeed.cohort,
-          profile: 'normal',
-          academicStatus: 'studying',
-          englishLevel: 'Miễn',
-        });
-        continue;
-      }
-
-      const mssv = makeMssv(classSeed, index);
-      const profile = profileFor(mssv, classSeed.cohort);
-      students.push({
-        mssv,
-        fullName: makeFullName(`${classSeed.code}-${index}`),
+      classDrafts.push({
+        fullName: classSeed.code === 'ATTN2024' && index === 1 ? 'Phan Lâm Dũng' : makeFullName(`${classSeed.code}-${index}`),
         classCode: classSeed.code,
         classId: classSeed.id,
         program: classSeed.program,
         training: classSeed.training,
         cohort: classSeed.cohort,
-        profile,
-        academicStatus: initialAcademicStatus(mssv, classSeed.cohort, profile),
-        englishLevel: hashString(`${mssv}-eng`) % 3 === 0 ? 'B1' : 'A2',
+        englishLevel: hashString(`${oldClassStyleMssv(classSeed, index)}-eng`) % 3 === 0 ? 'B1' : 'A2',
+        originalIndex: index,
       });
     }
+
+    const riskQuota = riskQuotaForClass(classSeed.code, count);
+    classDrafts
+      .sort((left, right) => left.fullName.localeCompare(right.fullName, 'vi') || left.originalIndex - right.originalIndex)
+      .forEach((draft, rank) => {
+        drafts.push({
+          fullName: draft.fullName,
+          classCode: classSeed.code,
+          classId: classSeed.id,
+          program: classSeed.program,
+          training: classSeed.training,
+          cohort: classSeed.cohort,
+          englishLevel: draft.fullName === 'Phan Lâm Dũng' && classSeed.code === 'ATTN2024' ? 'Miễn' : draft.englishLevel,
+          classRank: rank + 1,
+          riskQuota,
+          sortKey: `${draft.fullName}|${classSeed.code}|${String(draft.originalIndex).padStart(3, '0')}`,
+        });
+      });
   }
+
+  const students: StudentSeed[] = [];
+  for (const cohort of COHORTS) {
+    drafts
+      .filter((draft) => draft.cohort === cohort)
+      .sort((left, right) => left.sortKey.localeCompare(right.sortKey, 'vi'))
+      .forEach((draft, cohortIndex) => {
+        const mssv = makeMssv(cohort, cohortIndex + 1);
+        const profile = profileForClassRank(draft.classCode, draft.classRank, draft.riskQuota);
+        students.push({
+          mssv,
+          fullName: draft.fullName,
+          classCode: draft.classCode,
+          classId: draft.classId,
+          program: draft.program,
+          training: draft.training,
+          cohort: draft.cohort,
+          profile,
+          academicStatus:
+            draft.fullName === 'Phan Lâm Dũng' && draft.classCode === 'ATTN2024'
+              ? 'studying'
+              : initialAcademicStatus(mssv, draft.cohort, profile),
+          englishLevel: draft.englishLevel,
+        });
+      });
+  }
+
   return students;
 }
-
 function buildEnrollmentRows(
   students: Array<StudentSeed & { id: string }>,
   offeringByKey: Map<string, string>,
@@ -385,7 +419,7 @@ function buildEnrollmentRows(
     const availableTerms = completedTermsForCohort(student.cohort);
     const programCourses = COURSES.filter((course) => course.programs.includes(student.program));
 
-    if (student.mssv === '24520349') {
+    if (student.fullName === 'Phan Lâm Dũng' && student.classCode === 'ATTN2024') {
       for (const [courseCode, score] of exactTranscript.entries()) {
         const course = COURSES.find((item) => item.code === courseCode);
         if (!course) continue;
@@ -423,7 +457,7 @@ function buildEnrollmentRows(
         const failScore = Number((2.8 + (hashString(`${student.mssv}-${course.code}-bad`) % 20) / 10).toFixed(1));
         rows.push([student.id, offeringId, 1, failScore, failScore, 'F', false, false]);
 
-        const canRetake = plannedTerm + 1 <= availableTerms && hashString(`${student.mssv}-${course.code}-retake`) % 100 < 58;
+        const canRetake = plannedTerm + 1 <= availableTerms && hashString(`${student.mssv}-${course.code}-retake`) % 100 < 82;
         if (canRetake) {
           const retakeTerm = Math.min(plannedTerm + 1, 9);
           const retakeOffering = offeringByKey.get(`${student.classId}:${course.code}:HK${retakeTerm}`);
@@ -435,7 +469,7 @@ function buildEnrollmentRows(
         continue;
       }
 
-      const score = scoreFor(student, course, 1);
+      const score = Math.max(5.0, scoreFor(student, course, 1));
       const passed = score >= 5;
       rows.push([student.id, offeringId, 1, score, score, grade(score), passed, false]);
     }
@@ -651,7 +685,7 @@ async function run() {
       FROM avg_scores a
       WHERE a.student_id = s.id
     `);
-    await client.query("UPDATE students SET current_gpa = 7.97 WHERE mssv = '24520349'");
+    await client.query("UPDATE students SET current_gpa = 7.97 WHERE full_name = 'Phan Lâm Dũng' AND cohort_year = 2024");
 
     const riskRows = await client.query<{
       student_id: string;

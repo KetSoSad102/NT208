@@ -39,6 +39,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "")
+DAA_DEMO_TOKEN = os.getenv("DAA_DEMO_TOKEN", "")
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -65,6 +66,7 @@ class NotePayload(BaseModel):
 
 class ChatPayload(BaseModel):
     message: str
+    mode: str | None = None
 
 
 class ImportPayload(BaseModel):
@@ -160,11 +162,28 @@ def require_auth(authorization: str | None = Header(default=None)) -> CurrentUse
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
         ) from exc
+    username = payload.get("username")
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload"
+        )
+    current_user = query_one(
+        """
+        SELECT id::text, username, role, full_name
+        FROM users
+        WHERE username = %s
+        """,
+        (username,),
+    )
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists"
+        )
     return CurrentUser(
-        user_id=payload["sub"],
-        username=payload["username"],
-        role=payload["role"],
-        full_name=payload.get("full_name", payload["username"]),
+        user_id=current_user["id"],
+        username=current_user["username"],
+        role=current_user["role"],
+        full_name=current_user.get("full_name") or current_user["username"],
     )
 
 
@@ -262,6 +281,17 @@ def get_accessible_classes(user: CurrentUser) -> list[dict[str, Any]]:
         return query(
             "SELECT id, class_code, class_name, required_credits FROM classes ORDER BY class_code"
         )
+    if user.role == "LECTURER":
+        return query(
+            """
+            SELECT DISTINCT c.id, c.class_code, c.class_name, c.required_credits
+            FROM classes c
+            JOIN course_offerings co ON co.class_id = c.id
+            WHERE co.lecturer_user_id = %s
+            ORDER BY c.class_code
+            """,
+            (user.user_id,),
+        )
     return query(
         """
         SELECT id, class_code, class_name, required_credits
@@ -279,6 +309,19 @@ def can_access_class(user: CurrentUser, class_id: str) -> bool:
             query_one("SELECT 1 AS ok FROM classes WHERE id = %s", (class_id,))
             is not None
         )
+    if user.role == "LECTURER":
+        return (
+            query_one(
+                """
+                SELECT 1 AS ok
+                FROM course_offerings
+                WHERE class_id = %s AND lecturer_user_id = %s
+                LIMIT 1
+                """,
+                (class_id, user.user_id),
+            )
+            is not None
+        )
     return (
         query_one(
             "SELECT 1 AS ok FROM classes WHERE id = %s AND advisor_user_id = %s",
@@ -292,6 +335,21 @@ def can_access_student(user: CurrentUser, mssv: str) -> bool:
     if user.role == "DEAN_ADMIN":
         return (
             query_one("SELECT 1 AS ok FROM students WHERE mssv = %s", (mssv,))
+            is not None
+        )
+    if user.role == "LECTURER":
+        return (
+            query_one(
+                """
+                SELECT 1 AS ok
+                FROM students s
+                JOIN enrollments e ON e.student_id = s.id
+                JOIN course_offerings co ON co.id = e.course_offering_id
+                WHERE s.mssv = %s AND co.lecturer_user_id = %s
+                LIMIT 1
+                """,
+                (mssv, user.user_id),
+            )
             is not None
         )
     return (
@@ -308,63 +366,403 @@ def can_access_student(user: CurrentUser, mssv: str) -> bool:
     )
 
 
+def can_access_offering(user: CurrentUser, offering_id: str) -> bool:
+    if user.role == "DEAN_ADMIN":
+        return (
+            query_one("SELECT 1 AS ok FROM course_offerings WHERE id = %s", (offering_id,))
+            is not None
+        )
+    if user.role == "LECTURER":
+        return (
+            query_one(
+                "SELECT 1 AS ok FROM course_offerings WHERE id = %s AND lecturer_user_id = %s",
+                (offering_id, user.user_id),
+            )
+            is not None
+        )
+    return (
+        query_one(
+            """
+            SELECT 1 AS ok
+            FROM course_offerings co
+            JOIN classes c ON c.id = co.class_id
+            WHERE co.id = %s AND c.advisor_user_id = %s
+            """,
+            (offering_id, user.user_id),
+        )
+        is not None
+    )
+
+
+MIN_MAIN_TERM_CREDITS = 14
+MAX_MAIN_TERM_CREDITS = 30
+GRADUATION_WORK_CODES = {"GRD401"}
+
+COURSE_TERM_BY_CODE: dict[str, int] = {
+    "ENG01": 1,
+    "IT001": 1,
+    "MA003": 1,
+    "MA006": 1,
+    "PH002": 1,
+    "SS004": 1,
+    "NT015": 1,
+    "NT016": 1,
+    "IT003": 2,
+    "IT005": 2,
+    "IT006": 2,
+    "MA004": 2,
+    "MA005": 2,
+    "SS003": 2,
+    "SS006": 2,
+    "SS008": 2,
+    "IT002": 3,
+    "IT004": 3,
+    "IT007": 3,
+    "SS007": 3,
+    "SS009": 3,
+    "SS010": 3,
+    "NT209": 3,
+    "NT219": 3,
+    "MMT201": 3,
+    "MMT202": 3,
+    "ENG02": 4,
+    "ENG03": 4,
+    "NT101": 4,
+    "NT102": 4,
+    "NT103": 4,
+    "MMT203": 4,
+    "MMT204": 4,
+    "MMT205": 4,
+    "NT104": 5,
+    "NT105": 5,
+    "NT106": 5,
+    "NT201": 5,
+    "NT202": 5,
+    "NT203": 5,
+    "MMT301": 5,
+    "MMT302": 5,
+    "MMT303": 5,
+    "MMT304": 5,
+    "MMT305": 5,
+    "NT204": 6,
+    "NT205": 6,
+    "NT206": 6,
+    "NT207": 6,
+    "NT208": 6,
+    "MMT306": 6,
+    "MMT307": 6,
+    "MMT308": 6,
+    "MMT309": 6,
+    "NT210": 7,
+    "NT211": 7,
+    "NT212": 7,
+    "NT213": 7,
+    "NT214": 7,
+    "MMT310": 7,
+    "MMT311": 7,
+    "MMT312": 7,
+    "MMT313": 7,
+    "ELE001": 5,
+    "ELE002": 6,
+    "PRJ401": 7,
+    "INT401": 7,
+    "GRD401": 8,
+}
+
+COMMON_COURSES = {
+    "ENG01",
+    "ENG02",
+    "ENG03",
+    "IT001",
+    "IT002",
+    "IT003",
+    "IT004",
+    "IT005",
+    "IT006",
+    "IT007",
+    "MA003",
+    "MA004",
+    "MA005",
+    "MA006",
+    "PH002",
+    "SS003",
+    "SS004",
+    "SS006",
+    "SS007",
+    "SS008",
+    "SS009",
+    "SS010",
+    "NT102",
+    "ELE001",
+    "ELE002",
+    "PRJ401",
+    "INT401",
+    "GRD401",
+}
+ATTT_ONLY_COURSES = {
+    "NT015",
+    "NT101",
+    "NT103",
+    "NT104",
+    "NT105",
+    "NT106",
+    "NT201",
+    "NT202",
+    "NT203",
+    "NT204",
+    "NT205",
+    "NT206",
+    "NT207",
+    "NT208",
+    "NT209",
+    "NT210",
+    "NT211",
+    "NT212",
+    "NT213",
+    "NT214",
+    "NT219",
+}
+MMT_ONLY_COURSES = {
+    "NT016",
+    "MMT201",
+    "MMT202",
+    "MMT203",
+    "MMT204",
+    "MMT205",
+    "MMT301",
+    "MMT302",
+    "MMT303",
+    "MMT304",
+    "MMT305",
+    "MMT306",
+    "MMT307",
+    "MMT308",
+    "MMT309",
+    "MMT310",
+    "MMT311",
+    "MMT312",
+    "MMT313",
+}
+
+
+def course_codes_for_program(program: str) -> set[str]:
+    if program == "ATTT":
+        return COMMON_COURSES | ATTT_ONLY_COURSES
+    if program == "MMTTTDL":
+        return COMMON_COURSES | MMT_ONLY_COURSES
+    return set()
+
+
+def course_group(course_code: str) -> str:
+    term = COURSE_TERM_BY_CODE.get(course_code.upper(), 99)
+    if term <= 2:
+        return "Đại cương"
+    if term <= 4:
+        return "Cơ sở ngành"
+    if term <= 7:
+        return "Chuyên ngành"
+    return "Tốt nghiệp"
+
+
+def identify_program(class_code: str) -> dict[str, str]:
+    if re.fullmatch(r"ATTN20\d{2}", class_code, re.IGNORECASE):
+        return {
+            "program": "ATTT",
+            "programName": "An toàn thông tin",
+            "trainingSystem": "Tài năng",
+            "evidence": f"Mã lớp {class_code} khớp mẫu ATTN20xx của ngành ATTT hệ Tài năng.",
+        }
+    if re.fullmatch(r"ATTT20\d{2}(?:\.\d+)?", class_code, re.IGNORECASE):
+        return {
+            "program": "ATTT",
+            "programName": "An toàn thông tin",
+            "trainingSystem": "Đại trà",
+            "evidence": f"Mã lớp {class_code} khớp mẫu ATTT20xx(.nhóm) của ngành ATTT hệ Đại trà.",
+        }
+    if re.fullmatch(r"(?:MMTT|MMT&TT)20\d{2}(?:\.\d+)?", class_code, re.IGNORECASE):
+        return {
+            "program": "MMTTTDL",
+            "programName": "Mạng máy tính và Truyền thông dữ liệu",
+            "trainingSystem": "Đại trà",
+            "evidence": f"Mã lớp {class_code} khớp mẫu MMT&TT20xx(.nhóm) của ngành MMT&TTDL hệ Đại trà.",
+        }
+    return {
+        "program": "UNKNOWN",
+        "programName": "Không xác định",
+        "trainingSystem": "Không xác định",
+        "evidence": f"Mã lớp {class_code} chưa khớp policy nhận diện ngành.",
+    }
+
+
+def term_order(term_code: str) -> int:
+    match = re.search(r"\d+", term_code or "")
+    return int(match.group(0)) if match else 999
+
+
+def passed_by_policy(row: dict[str, Any]) -> bool:
+    letter = str(row.get("letter_grade") or "").upper()
+    if letter in {"MIEN", "MIỄN", "EXEMPT"}:
+        return True
+    return letter != "F" and float(row.get("final_score") or 0) >= 5
+
+
+def failed_by_policy(row: dict[str, Any]) -> bool:
+    letter = str(row.get("letter_grade") or "").upper()
+    if letter in {"MIEN", "MIỄN", "EXEMPT"}:
+        return False
+    return letter == "F" or float(row.get("final_score") or 0) < 5
+
+
+def is_graduation_work(row: dict[str, Any]) -> bool:
+    course_code = str(row.get("course_code") or "").upper()
+    course_name = normalize_text(str(row.get("course_name") or ""))
+    return course_code in GRADUATION_WORK_CODES or "khoa luan" in course_name or "chuyen de tot nghiep" in course_name
+
+
+def standard_cumulative_credits(program: str, term_index: int) -> int:
+    codes = course_codes_for_program(program)
+    if not codes:
+        return 0
+    course_rows = query(
+        """
+        SELECT course_code, credits
+        FROM courses
+        WHERE course_code = ANY(%s)
+        """,
+        (list(codes),),
+    )
+    return sum(
+        int(row["credits"])
+        for row in course_rows
+        if COURSE_TERM_BY_CODE.get(row["course_code"].upper(), 99) <= term_index
+    )
+
+
+def curriculum_courses(program: str) -> list[dict[str, Any]]:
+    codes = course_codes_for_program(program)
+    if not codes:
+        return []
+    rows = query(
+        """
+        SELECT course_code, course_name, credits
+        FROM courses
+        WHERE course_code = ANY(%s)
+        ORDER BY course_code
+        """,
+        (list(codes),),
+    )
+    return [
+        {
+            "code": row["course_code"],
+            "name": row["course_name"],
+            "credits": int(row["credits"]),
+            "group": course_group(row["course_code"]),
+            "term": COURSE_TERM_BY_CODE.get(row["course_code"].upper(), 99),
+        }
+        for row in rows
+    ]
+
+
 RISK_SQL = """
-WITH student_metrics AS (
+WITH course_state AS (
   SELECT
-    s.id,
-    s.mssv,
-    s.full_name,
-    c.class_code,
-    c.required_credits,
-    COALESCE(s.current_gpa, 0)::float AS current_gpa,
-    COALESCE(SUM(CASE WHEN e.passed THEN cr.credits ELSE 0 END), 0)::float AS completed_credits,
-    COALESCE(SUM(CASE WHEN e.passed = FALSE THEN 1 ELSE 0 END), 0)::int AS failed_courses,
-    COALESCE(SUM(CASE WHEN e.final_score < 5 THEN 1 ELSE 0 END), 0)::int AS low_score_courses
+    s.id AS student_id,
+    cr.course_code,
+    cr.credits,
+    BOOL_OR(e.passed) AS has_passed,
+    BOOL_OR(e.passed = FALSE OR e.final_score < 5) AS has_failed,
+    MIN(e.final_score) AS min_score
   FROM students s
-  JOIN classes c ON c.id = s.class_id
   LEFT JOIN enrollments e ON e.student_id = s.id
   LEFT JOIN course_offerings co ON co.id = e.course_offering_id
   LEFT JOIN courses cr ON cr.id = co.course_id
-  GROUP BY s.id, c.class_code, c.required_credits
-),
-risk AS (
+	  GROUP BY s.id, cr.course_code, cr.credits
+	),
+term_state AS (
   SELECT
-    *,
-    GREATEST(required_credits - completed_credits, 0) AS debt_credits,
+    s.id AS student_id,
+    COALESCE(
+      MAX(
+        CASE
+          WHEN t.term_code ~ '^HK[0-9]+$' THEN REGEXP_REPLACE(t.term_code, '[^0-9]', '', 'g')::int
+          ELSE 0
+        END
+      ),
+      0
+    ) AS latest_term_index
+  FROM students s
+  LEFT JOIN enrollments e ON e.student_id = s.id
+  LEFT JOIN course_offerings co ON co.id = e.course_offering_id
+  LEFT JOIN terms t ON t.id = co.term_id
+  GROUP BY s.id
+),
+student_metrics AS (
+	  SELECT
+	    s.id,
+    s.mssv,
+    s.full_name,
+    s.academic_status,
+    c.class_code,
+	    c.required_credits,
+	    COALESCE(ts.latest_term_index, 0)::int AS latest_term_index,
+	    COALESCE(s.current_gpa, 0)::float AS current_gpa,
+	    COALESCE(SUM(CASE WHEN cs.has_passed THEN cs.credits ELSE 0 END), 0)::float AS completed_credits,
+    COALESCE(SUM(CASE WHEN cs.has_failed AND NOT cs.has_passed THEN cs.credits ELSE 0 END), 0)::float AS debt_credits,
+    COALESCE(SUM(CASE WHEN cs.has_failed AND NOT cs.has_passed THEN 1 ELSE 0 END), 0)::int AS failed_courses,
+    COALESCE(SUM(CASE WHEN cs.min_score < 5 THEN 1 ELSE 0 END), 0)::int AS low_score_courses
+	  FROM students s
+	  JOIN classes c ON c.id = s.class_id
+	  LEFT JOIN course_state cs ON cs.student_id = s.id
+	  LEFT JOIN term_state ts ON ts.student_id = s.id
+	  GROUP BY s.id, c.class_code, c.required_credits, ts.latest_term_index
+	),
+risk AS (
+	  SELECT
+	    *,
     CASE
       WHEN required_credits > 0 THEN completed_credits / required_credits
       ELSE 0
     END AS completion_ratio,
     CASE
-      WHEN required_credits > 0 THEN GREATEST(required_credits - completed_credits, 0) / required_credits
-      ELSE 0
-    END AS debt_ratio,
-    LEAST(
-      100,
-      ROUND(
-        (
-          LEAST(1, GREATEST(0, (5 - current_gpa) / 5.0)) * 45 +
-          LEAST(
-            1,
-            CASE
-              WHEN required_credits > 0 THEN GREATEST(required_credits - completed_credits, 0) / required_credits
-              ELSE 0
-            END
-          ) * 35 +
-          LEAST(failed_courses, 4) * 5 +
-          LEAST(low_score_courses, 4) * 3
-        )::numeric,
-        1
+      WHEN required_credits > 0 AND completed_credits >= required_credits THEN 'graduated'
+      ELSE academic_status
+    END AS effective_academic_status,
+    CASE
+      WHEN required_credits > 0 AND completed_credits >= required_credits THEN 0
+      ELSE LEAST(
+        100,
+        ROUND(
+          (
+	            LEAST(1, GREATEST(0, (5 - current_gpa) / 5.0)) * 45 +
+	            LEAST(1, GREATEST(0, (70 - ((completed_credits / NULLIF(required_credits, 0)) * 100)) / 70.0)) * 30 +
+	            LEAST(
+	              CASE
+	                WHEN required_credits > 0
+	                  AND completed_credits >= required_credits - 10
+	                  AND debt_credits = 0
+	                THEN 0
+	                ELSE GREATEST(0, LEAST(required_credits, latest_term_index * 17) - completed_credits)
+	              END,
+	              34
+	            ) * 2.2 +
+	            LEAST(debt_credits, 30) * 0.9 +
+	            LEAST(failed_courses, 4) * 5 +
+	            LEAST(low_score_courses, 4) * 3
+          )::numeric,
+          1
+        )
       )
-    ) AS delay_risk_score
+    END AS delay_risk_score
   FROM student_metrics
 )
 SELECT
   id,
   mssv,
   full_name,
+  effective_academic_status AS academic_status,
   class_code,
   current_gpa,
+  latest_term_index,
   completed_credits,
   required_credits,
   debt_credits,
@@ -412,8 +810,8 @@ def compact_risk_row(student: dict[str, Any]) -> dict[str, Any]:
         "Họ tên": student["fullName"],
         "Lớp": student["classCode"],
         "GPA": student["currentGpa"],
-        "Tín chỉ tích lũy": student["completedCredits"],
-        "Tín chỉ còn thiếu": student["debtCredits"],
+        "Hoàn thành tín chỉ": student["completedCredits"],
+        "Môn rớt chưa học lại": student["debtCredits"],
         "Mức rủi ro (%)": student["delayRiskScore"],
         "Nhóm rủi ro": student["riskBand"],
         "Khuyến nghị": student["recommendedAction"],
@@ -451,24 +849,29 @@ def fetch_risk_students(
         score = float(row["delay_risk_score"] or 0)
         failed_courses = int(row["failed_courses"] or 0)
         low_score_courses = int(row["low_score_courses"] or 0)
+        academic_status = row.get("academic_status")
         enriched.append(
             {
                 "id": row["id"],
                 "mssv": row["mssv"],
                 "fullName": row["full_name"],
                 "classCode": row["class_code"],
+                "academicStatus": academic_status,
                 "currentGpa": round(current_gpa, 2),
+                "latestTermIndex": int(row["latest_term_index"] or 0),
                 "completedCredits": float(row["completed_credits"] or 0),
                 "requiredCredits": float(row["required_credits"] or 0),
                 "debtCredits": float(row["debt_credits"] or 0),
-                "completionRatio": round(completion_ratio, 3),
+                "completionRatio": round(completion_ratio * 100, 2),
                 "failedCourses": failed_courses,
                 "lowScoreCourses": low_score_courses,
                 "delayRiskScore": round(score, 1),
                 "riskBand": summarize_risk_band(score),
                 "quadrant": summarize_quadrant(completion_ratio, current_gpa),
-                "recommendedAction": recommend_action(
-                    score, failed_courses, low_score_courses
+                "recommendedAction": (
+                    "Đã tốt nghiệp, lưu hồ sơ theo dõi cựu sinh viên."
+                    if academic_status == "graduated"
+                    else recommend_action(score, failed_courses, low_score_courses)
                 ),
             }
         )
@@ -569,6 +972,16 @@ def extract_class_code_from_message(message: str, class_codes: list[str]) -> str
     for code in class_codes:
         if code.upper() in upper:
             return code
+
+    if len(class_codes) == 1:
+        return class_codes[0]
+
+    pattern_matches = re.findall(r"\b[A-Z][A-Z0-9&\.]*\d{4}(?:\.\d+)?\b", message)
+    for match in pattern_matches:
+        for code in class_codes:
+            if match.upper() == code.upper():
+                return code
+
     return None
 
 
@@ -619,6 +1032,11 @@ def build_rule_based_plan(
             "tool": "top_students",
             "params": {"classCode": class_code, "limit": limit},
         }
+    if any(token in normalized for token in ["gpa thap", "diem thap", "gpa toi thieu", "thanh tich thap"]):
+        return {
+            "tool": "low_gpa_students",
+            "params": {"classCode": class_code, "limit": limit},
+        }
     if any(token in normalized for token in ["nguy co", "rot mon", "canh bao"]) and (
         course["courseCode"] or course["courseName"]
     ):
@@ -636,14 +1054,19 @@ def plan_chat_query(
 ) -> dict[str, Any]:
     forced_rule_plan = build_rule_based_plan(message, class_codes)
     normalized = normalize_text(message)
-    if forced_rule_plan["tool"] == "grade_distribution":
+    if forced_rule_plan["tool"] in ["grade_distribution"]:
+        return forced_rule_plan
+
+    if forced_rule_plan["tool"] in ["top_students", "low_gpa_students", "at_risk_students"] and forced_rule_plan.get("params"):
         return forced_rule_plan
 
     llm_plan = llm_json(
         (
-            "Ban la bo lap ke hoach chat-to-data. "
-            'Tra ve JSON voi dang {"tool": string, "params": object}. '
-            "Chi duoc chon mot trong cac tool: top_students, at_risk_students, grade_distribution, risk_overview."
+            "Bạn là bộ lập kế hoạch truy vấn dữ liệu học vụ. "
+            "Chỉ trả về JSON hợp lệ, không giải thích, không markdown. "
+            'Schema bắt buộc: {"tool": string, "params": object}. '
+            "tool chỉ được là: top_students, low_gpa_students, at_risk_students, grade_distribution, risk_overview. "
+            "Nếu người dùng hỏi xã giao hoặc không hỏi dữ liệu, không tự chọn tool dữ liệu."
         ),
         message,
     )
@@ -656,6 +1079,60 @@ def plan_chat_query(
             return {"tool": "grade_distribution", "params": params}
         return llm_plan
     return forced_rule_plan
+
+
+def small_talk_answer(message: str) -> str | None:
+    normalized = normalize_text(message)
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return None
+
+    data_keywords = [
+        "sinh vien",
+        "mssv",
+        "lop",
+        "gpa",
+        "diem",
+        "tin chi",
+        "hoc vu",
+        "rui ro",
+        "canh bao",
+        "mon",
+        "pho diem",
+        "bieu do",
+        "top",
+        "thong ke",
+        "tong quan",
+    ]
+    if any(keyword in cleaned for keyword in data_keywords):
+        return None
+
+    greeting_phrases = {
+        "hi",
+        "hello",
+        "hey",
+        "alo",
+        "xin chao",
+        "chao",
+        "chao ban",
+        "xin chao ban",
+    }
+    thanks_phrases = {"cam on", "thanks", "thank you", "ok", "oke", "duoc roi"}
+    identity_phrases = {"ban la ai", "may la ai", "tro ly nay la gi"}
+
+    word_count = len(cleaned.split())
+    if cleaned in greeting_phrases or (
+        word_count <= 4 and any(phrase in cleaned for phrase in greeting_phrases)
+    ):
+        return "Xin chào! Mình đang sẵn sàng hỗ trợ."
+    if cleaned in thanks_phrases or (
+        word_count <= 4 and any(phrase in cleaned for phrase in thanks_phrases)
+    ):
+        return "Rất vui được hỗ trợ bạn."
+    if cleaned in identity_phrases:
+        return "Mình là trợ lý AI học vụ của hệ thống CVHT."
+    return None
 
 
 def build_llm_brief_payload(
@@ -700,7 +1177,11 @@ def grade_distribution_rows(
 
     sql = """
     SELECT
-      CONCAT(FLOOR(e.final_score)::int, '-', FLOOR(e.final_score)::int + 0.9) AS bin,
+      CASE
+        WHEN FLOOR(e.final_score)::int >= 10 THEN '10'
+        ELSE CONCAT(FLOOR(e.final_score)::int, '-', FLOOR(e.final_score)::int + 0.9)
+      END AS bin,
+      FLOOR(e.final_score)::int AS sort_key,
       COUNT(*)::int AS count
     FROM enrollments e
     JOIN students s ON s.id = e.student_id
@@ -721,6 +1202,7 @@ def grade_distribution_rows(
         params.append(course_name)
     sql += " GROUP BY FLOOR(e.final_score) ORDER BY FLOOR(e.final_score)"
     rows = query(sql, tuple(params))
+    rows = [{"bin": row["bin"], "count": row["count"]} for row in rows]
     answer = f"Phổ điểm môn {course_name or course_code} có {sum(int(row['count']) for row in rows)} lượt ghi nhận."
     return {
         "answer": answer,
@@ -732,7 +1214,13 @@ def grade_distribution_rows(
 
 def execute_chat_plan(plan: dict[str, Any], user: CurrentUser) -> dict[str, Any]:
     params = plan.get("params", {}) if isinstance(plan.get("params"), dict) else {}
-    class_code = params.get("classCode")
+    class_code = (
+        params.get("classCode")
+        or params.get("class_code")
+        or params.get("class")
+        or params.get("lop")
+        or params.get("lớp")
+    )
     allowed_codes = [row["class_code"] for row in get_accessible_classes(user)]
     if class_code and class_code not in allowed_codes:
         raise HTTPException(
@@ -764,11 +1252,72 @@ def execute_chat_plan(plan: dict[str, Any], user: CurrentUser) -> dict[str, Any]
             }
             for row in raw_rows
         ]
+        
+        # Generate natural response
+        if rows:
+            top_student = rows[0]
+            answer_parts = [
+                f"Sinh viên xuất sắc nhất là {top_student['Họ tên']} ({top_student['MSSV']}) "
+                f"với GPA {top_student['GPA hiện tại']}."
+            ]
+            if len(rows) > 1:
+                gpa_list = ", ".join([f"{r['Họ tên']} (GPA: {r['GPA hiện tại']})" for r in rows[1:3]])
+                answer_parts.append(f"Những sinh viên khác cũng có thành tích tốt: {gpa_list}.")
+            answer = " ".join(answer_parts)
+        else:
+            answer = "Mình chưa tìm thấy sinh viên phù hợp với câu hỏi này."
+        
         return {
-            "answer": f"Đã tìm {len(rows)} sinh viên có thành tích học tập tốt nhất trong phạm vi truy vấn.",
+            "answer": answer,
             "rows": rows,
             "visualization": {"type": "table"},
             "sqlPreview": "-- Top sinh viên theo GPA hiện tại",
+        }
+
+    if plan["tool"] == "low_gpa_students":
+        limit = int(params.get("limit") or 5)
+        sql = """
+        SELECT s.mssv, s.full_name, cl.class_code, ROUND(s.current_gpa::numeric, 2) AS current_gpa
+        FROM students s
+        JOIN classes cl ON cl.id = s.class_id
+        WHERE cl.class_code = ANY(%s)
+        """
+        query_params: list[Any] = [allowed_codes]
+        if class_code:
+            sql += " AND cl.class_code = %s"
+            query_params.append(class_code)
+        sql += " ORDER BY s.current_gpa ASC, s.mssv LIMIT %s"
+        query_params.append(limit)
+        raw_rows = query(sql, tuple(query_params))
+        rows = [
+            {
+                "MSSV": row["mssv"],
+                "Họ tên": row["full_name"],
+                "Lớp": row["class_code"],
+                "GPA hiện tại": float(row["current_gpa"] or 0),
+            }
+            for row in raw_rows
+        ]
+        
+        # Generate natural response
+        if rows:
+            low_student = rows[0]
+            answer_parts = [
+                f"Sinh viên có GPA thấp nhất là {low_student['Họ tên']} ({low_student['MSSV']}) "
+                f"với GPA {low_student['GPA hiện tại']}. Cần hỗ trợ sinh viên này."
+            ]
+            if len(rows) > 1:
+                gpa_list = ", ".join([f"{r['Họ tên']} (GPA: {r['GPA hiện tại']})" for r in rows[1:3]])
+                answer_parts.append(f"Những sinh viên khác cần chú ý: {gpa_list}.")
+            answer = " ".join(answer_parts)
+        else:
+            answer = "Mình chưa tìm thấy sinh viên phù hợp với câu hỏi này."
+        
+        return {
+            "answer": answer,
+            "rows": rows,
+            "visualization": {"type": "table"},
+            "sqlPreview": "-- Sinh viên GPA thấp nhất",
         }
 
     if plan["tool"] == "at_risk_students":
@@ -799,8 +1348,16 @@ def execute_chat_plan(plan: dict[str, Any], user: CurrentUser) -> dict[str, Any]
             mssv_set = {row["mssv"] for row in course_rows}
             filtered = [item for item in filtered if item["mssv"] in mssv_set]
         compact_rows = [compact_risk_row(item) for item in filtered]
+        
+        # Generate natural response
+        if filtered:
+            critical_note = f" (trong đó {len([s for s in filtered if s['riskBand'] == 'critical'])} trường hợp nguy cấp)" if any(s['riskBand'] == 'critical' for s in filtered) else ""
+            answer = f"Có {len(filtered)} sinh viên cần chú ý về nguy cơ rớt môn{critical_note}. Mình đã liệt kê danh sách để bạn hỗ trợ kịp thời."
+        else:
+            answer = "Tốt lắm! Hiện chưa có sinh viên nào nổi bật về nguy cơ rớt môn theo điều kiện bạn hỏi."
+        
         return {
-            "answer": f"Có {len(filtered)} sinh viên đang cần chú ý về nguy cơ rớt môn.",
+            "answer": answer,
             "rows": compact_rows,
             "visualization": {"type": "table"},
             "sqlPreview": "-- Nhóm sinh viên nguy cơ rớt môn",
@@ -819,10 +1376,10 @@ def execute_chat_plan(plan: dict[str, Any], user: CurrentUser) -> dict[str, Any]
     critical = len([item for item in students if item["riskBand"] == "critical"])
     return {
         "answer": (
-            f"Có {len(students)} sinh viên trong tập kết quả, {critical} trường hợp mức nguy cấp. "
+            f"Mình đang thấy {len(students)} sinh viên, trong đó {critical} trường hợp ở mức nguy cấp. "
             f"Cần ưu tiên {top[0]['fullName']} ({top[0]['mssv']}) với điểm rủi ro {top[0]['delayRiskScore']}%."
             if top
-            else "Không có dữ liệu rủi ro trong phạm vi truy cập."
+            else "Mình chưa có dữ liệu rủi ro phù hợp để tổng hợp."
         ),
         "rows": [compact_risk_row(item) for item in top],
         "visualization": {"type": "table"},
@@ -871,40 +1428,202 @@ def class_students(
         )
     return query(
         """
-        SELECT id, mssv, full_name, COALESCE(current_gpa, 0)::float AS current_gpa
+        SELECT id, mssv, full_name, COALESCE(current_gpa, 0)::float AS current_gpa, academic_status
         FROM students
         WHERE class_id = %s
-        ORDER BY mssv
+        ORDER BY full_name, mssv
         """,
         (class_id,),
     )
 
 
-@app.get("/students/{mssv}/dashboard")
-def student_dashboard(
-    mssv: str, user: CurrentUser = Depends(require_auth)
-) -> dict[str, Any]:
-    if not can_access_student(user, mssv):
+@app.get("/daa-demo/offerings")
+def daa_demo_offerings(
+    user: CurrentUser = Depends(require_roles("DEAN_ADMIN", "LECTURER"))
+) -> list[dict[str, Any]]:
+    if user.role == "DEAN_ADMIN":
+        params: tuple[Any, ...] = ()
+        lecturer_filter = "WHERE co.lecturer_user_id IS NOT NULL"
+    else:
+        params = (user.user_id,)
+        lecturer_filter = "WHERE co.lecturer_user_id = %s"
+
+    return query(
+        f"""
+        SELECT
+          co.id AS "offeringId",
+          cl.class_code AS "classCode",
+          cl.class_name AS "className",
+          t.term_code AS "termCode",
+          t.term_name AS "termName",
+          c.course_code AS "courseCode",
+          c.course_name AS "courseName",
+          c.credits::int AS credits,
+          COALESCE(co.lecturer_name, u.full_name, 'Giảng viên') AS "lecturerName",
+          COUNT(e.id)::int AS "studentCount"
+        FROM course_offerings co
+        JOIN classes cl ON cl.id = co.class_id
+        JOIN courses c ON c.id = co.course_id
+        JOIN terms t ON t.id = co.term_id
+        LEFT JOIN users u ON u.id = co.lecturer_user_id
+        LEFT JOIN enrollments e ON e.course_offering_id = co.id
+        {lecturer_filter}
+        GROUP BY co.id, cl.class_code, cl.class_name, t.term_code, t.term_name,
+                 c.course_code, c.course_name, c.credits, co.lecturer_name, u.full_name, t.start_date
+        HAVING COUNT(e.id) > 0
+        ORDER BY t.start_date DESC, cl.class_code, c.course_code
+        LIMIT 80
+        """,
+        params,
+    )
+
+
+@app.get("/daa-demo/offerings/{offering_id}/students")
+def daa_demo_offering_students(
+    offering_id: str, user: CurrentUser = Depends(require_roles("DEAN_ADMIN", "LECTURER"))
+) -> list[dict[str, Any]]:
+    if not can_access_offering(user, offering_id):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden offering scope"
         )
-    student = query_one(
+    return query(
         """
-        SELECT s.id, s.mssv, s.full_name, c.class_code, c.required_credits
+        SELECT
+          s.mssv,
+          s.full_name AS "fullName",
+          e.process_score::float AS "processScore",
+          e.midterm_score::float AS "midtermScore",
+          e.practical_score::float AS "practicalScore",
+          e.final_score::float AS "finalScore",
+          COALESCE(e.overall_score, e.final_score)::float AS "overallScore",
+          e.letter_grade AS "letterGrade",
+          e.passed,
+          e.synced_at::text AS "syncedAt",
+          e.source_system AS "sourceSystem"
+        FROM enrollments e
+        JOIN students s ON s.id = e.student_id
+        WHERE e.course_offering_id = %s
+        ORDER BY s.full_name, s.mssv
+        """,
+        (offering_id,),
+    )
+
+
+@app.get("/daa-demo/offerings/{offering_id}/students/{mssv}/grades")
+def daa_demo_student_grade(
+    offering_id: str,
+    mssv: str,
+    user: CurrentUser = Depends(require_roles("DEAN_ADMIN", "LECTURER")),
+) -> dict[str, Any]:
+    if not can_access_offering(user, offering_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden offering scope"
+        )
+    row = query_one(
+        """
+        SELECT
+          s.mssv,
+          s.full_name AS "fullName",
+          cl.class_code AS "classCode",
+          t.term_code AS "termCode",
+          c.course_code AS "courseCode",
+          c.course_name AS "courseName",
+          c.credits::int AS credits,
+          e.attempt_no::int AS "attemptNo",
+          e.process_score::float AS "processScore",
+          e.midterm_score::float AS "midtermScore",
+          e.practical_score::float AS "practicalScore",
+          e.final_score::float AS "finalScore",
+          COALESCE(e.overall_score, e.final_score)::float AS "overallScore",
+          e.letter_grade AS "letterGrade",
+          e.passed,
+          e.synced_at::text AS "syncedAt",
+          e.source_system AS "sourceSystem"
+        FROM enrollments e
+        JOIN students s ON s.id = e.student_id
+        JOIN course_offerings co ON co.id = e.course_offering_id
+        JOIN classes cl ON cl.id = co.class_id
+        JOIN courses c ON c.id = co.course_id
+        JOIN terms t ON t.id = co.term_id
+        WHERE e.course_offering_id = %s AND s.mssv = %s
+        """,
+        (offering_id, mssv),
+    )
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grade not found")
+    return row
+
+
+@app.get("/daa-demo/api/snapshot")
+def daa_demo_snapshot(
+    x_daa_token: str | None = Header(default=None, alias="X-DAA-Token")
+) -> dict[str, Any]:
+    if DAA_DEMO_TOKEN and x_daa_token != DAA_DEMO_TOKEN:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid DAA token")
+
+    rows = query(
+        """
+        SELECT
+          s.mssv,
+          s.full_name AS "fullName",
+          cl.class_code AS "classCode",
+          t.term_code AS "termCode",
+          c.course_code AS "courseCode",
+          c.course_name AS "courseName",
+          c.credits::int AS credits,
+          COALESCE(e.process_score, e.final_score)::float AS "processScore",
+          COALESCE(e.midterm_score, e.final_score)::float AS "midtermScore",
+          COALESCE(e.practical_score, e.final_score)::float AS "practicalScore",
+          e.final_score::float AS "finalScore",
+          COALESCE(e.overall_score, e.final_score)::float AS "overallScore",
+          COALESCE(co.lecturer_name, u.full_name, 'Giảng viên') AS "lecturerName"
+        FROM enrollments e
+        JOIN students s ON s.id = e.student_id
+        JOIN course_offerings co ON co.id = e.course_offering_id
+        JOIN classes cl ON cl.id = co.class_id
+        JOIN courses c ON c.id = co.course_id
+        JOIN terms t ON t.id = co.term_id
+        LEFT JOIN users u ON u.id = co.lecturer_user_id
+        WHERE co.lecturer_user_id IS NOT NULL
+        ORDER BY t.start_date DESC, cl.class_code, c.course_code, s.mssv
+        LIMIT 500
+        """
+    )
+    return {
+        "sourceName": "daa_demo",
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "results": rows,
+    }
+
+
+def student_profile_data(mssv: str) -> dict[str, Any] | None:
+    return query_one(
+        """
+        SELECT
+          s.id,
+          s.mssv,
+          s.full_name,
+          s.current_gpa::float AS current_gpa,
+          s.english_level,
+          s.cohort_year,
+          s.program_code,
+          s.training_system,
+          s.academic_status,
+          c.class_code,
+          c.class_name,
+          c.required_credits
         FROM students s
         JOIN classes c ON c.id = s.class_id
         WHERE s.mssv = %s
         """,
         (mssv,),
     )
-    if not student:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
-        )
 
-    gpa_trend = query(
+
+def gpa_trend_data(mssv: str) -> list[dict[str, Any]]:
+    return query(
         """
-        SELECT t.term_code AS "termCode", ROUND(AVG(e.final_score)::numeric, 2) AS gpa
+        SELECT t.term_code AS "termCode", ROUND(AVG(e.final_score)::numeric, 2)::float AS gpa
         FROM enrollments e
         JOIN course_offerings co ON co.id = e.course_offering_id
         JOIN terms t ON t.id = co.term_id
@@ -915,62 +1634,715 @@ def student_dashboard(
         """,
         (mssv,),
     )
-    credit_progress = (
-        query_one(
-            """
-        SELECT
-          COALESCE(SUM(CASE WHEN e.passed THEN c.credits ELSE 0 END), 0)::float AS completed,
-          cl.required_credits::float AS required
-        FROM students s
-        JOIN classes cl ON cl.id = s.class_id
-        LEFT JOIN enrollments e ON e.student_id = s.id
-        LEFT JOIN course_offerings co ON co.id = e.course_offering_id
-        LEFT JOIN courses c ON c.id = co.course_id
-        WHERE s.mssv = %s
-        GROUP BY cl.required_credits
-        """,
-            (mssv,),
-        )
-        or {"completed": 0, "required": 0}
-    )
-    alerts = query(
+
+
+def student_grades_data(mssv: str) -> dict[str, Any] | None:
+    student = student_profile_data(mssv)
+    if not student:
+        return None
+
+    rows = query(
         """
+        SELECT
+          t.term_code AS "termCode",
+          t.term_name AS "termName",
+          t.start_date::text AS "startDate",
+          c.course_code AS "courseCode",
+          c.course_name AS "courseName",
+          c.credits::int AS credits,
+          e.attempt_no::int AS "attemptNo",
+          COALESCE(e.process_score, 0)::float AS "processScore",
+          COALESCE(e.midterm_score, 0)::float AS "midtermScore",
+          COALESCE(e.practical_score, 0)::float AS "practicalScore",
+          e.final_score::float AS "finalScore",
+          COALESCE(e.overall_score, e.final_score)::float AS "overallScore",
+          e.letter_grade AS "letterGrade",
+          e.passed AS passed,
+          e.is_retake AS "isRetake",
+          e.synced_at::text AS "syncedAt",
+          e.source_system AS "sourceSystem"
+        FROM enrollments e
+        JOIN course_offerings co ON co.id = e.course_offering_id
+        JOIN courses c ON c.id = co.course_id
+        JOIN terms t ON t.id = co.term_id
+        JOIN students s ON s.id = e.student_id
+        WHERE s.mssv = %s
+        ORDER BY t.start_date, c.course_code, e.attempt_no
+        """,
+        (mssv,),
+    )
+
+    terms: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        term = terms.setdefault(
+            row["termCode"],
+            {
+                "termCode": row["termCode"],
+                "termName": row["termName"],
+                "startDate": row["startDate"],
+                "registeredCredits": 0,
+                "passedCredits": 0,
+                "termGpa": 0,
+                "courses": [],
+            },
+        )
+        term["registeredCredits"] += int(row["credits"])
+        if row["passed"]:
+            term["passedCredits"] += int(row["credits"])
+        term["courses"].append(
+            {
+                "courseCode": row["courseCode"],
+                "courseName": row["courseName"],
+                "credits": int(row["credits"]),
+                "attemptNo": int(row["attemptNo"]),
+                "processScore": float(row["processScore"] or 0),
+                "midtermScore": float(row["midtermScore"] or 0),
+                "practicalScore": float(row["practicalScore"] or 0),
+                "finalScore": float(row["finalScore"] or 0),
+                "overallScore": float(row["overallScore"] or 0),
+                "letterGrade": row["letterGrade"],
+                "passed": bool(row["passed"]),
+                "isRetake": bool(row["isRetake"]),
+                "syncedAt": row["syncedAt"],
+                "sourceSystem": row["sourceSystem"],
+            }
+        )
+
+    for term in terms.values():
+        scored_courses = [
+            course
+            for course in term["courses"]
+            if str(course["letterGrade"]).upper() not in {"MIEN", "MIỄN", "EXEMPT"}
+        ]
+        if scored_courses:
+            term["termGpa"] = round(
+                sum(float(course["finalScore"]) for course in scored_courses)
+                / len(scored_courses),
+                2,
+            )
+
+    all_courses = [course for term in terms.values() for course in term["courses"]]
+    return {
+        "student": {
+            "id": student["id"],
+            "mssv": student["mssv"],
+            "fullName": student["full_name"],
+            "classCode": student["class_code"],
+        },
+        "summary": {
+            "courseCount": len(all_courses),
+            "registeredCredits": sum(int(course["credits"]) for course in all_courses),
+            "passedCredits": sum(
+                int(course["credits"]) for course in all_courses if course["passed"]
+            ),
+            "failedCount": len([course for course in all_courses if not course["passed"]]),
+        },
+        "terms": list(terms.values()),
+    }
+
+
+def parse_mssv_selection(value: str | None) -> list[str]:
+    if not value:
+        return []
+    cleaned = [item.strip() for item in value.split(",") if item.strip()]
+    return list(dict.fromkeys(cleaned))
+
+
+def gpa_lines_data(
+    user: CurrentUser,
+    class_code: str | None = None,
+    selected_mssv: str | None = None,
+    limit: int = 5,
+) -> dict[str, Any]:
+    allowed_codes = [row["class_code"] for row in get_accessible_classes(user)]
+    if class_code and class_code not in allowed_codes:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden class scope"
+        )
+
+    scoped_codes = [class_code] if class_code else allowed_codes
+    selected = parse_mssv_selection(selected_mssv)
+    safe_limit = max(1, min(limit, 30))
+
+    available_students = query(
+        """
+        SELECT
+          s.mssv,
+          s.full_name AS "fullName",
+          c.class_code AS "classCode",
+          COALESCE(s.current_gpa, 0)::float AS "currentGpa"
+        FROM students s
+        JOIN classes c ON c.id = s.class_id
+        WHERE c.class_code = ANY(%s)
+        ORDER BY s.current_gpa DESC, s.full_name, s.mssv
+        """,
+        (scoped_codes,),
+    )
+
+    if selected:
+        student_rows = query(
+            """
+            SELECT
+              s.mssv,
+              s.full_name AS "fullName",
+              c.class_code AS "classCode",
+              COALESCE(s.current_gpa, 0)::float AS "currentGpa"
+            FROM students s
+            JOIN classes c ON c.id = s.class_id
+            WHERE c.class_code = ANY(%s)
+              AND s.mssv = ANY(%s)
+            ORDER BY array_position(%s::text[], s.mssv), s.mssv
+            """,
+            (scoped_codes, selected, selected),
+        )
+    else:
+        student_rows = query(
+            """
+            SELECT
+              s.mssv,
+              s.full_name AS "fullName",
+              c.class_code AS "classCode",
+              COALESCE(s.current_gpa, 0)::float AS "currentGpa"
+            FROM students s
+            JOIN classes c ON c.id = s.class_id
+            WHERE c.class_code = ANY(%s)
+            ORDER BY RANDOM()
+            LIMIT %s
+            """,
+            (scoped_codes, safe_limit),
+        )
+
+    selected_ids = [row["mssv"] for row in student_rows]
+    if not selected_ids:
+        return {
+            "termCodes": [],
+            "students": [],
+            "availableStudents": available_students,
+        }
+
+    trend_rows = query(
+        """
+        SELECT
+          s.mssv,
+          t.term_code AS "termCode",
+          ROUND(AVG(e.final_score)::numeric, 2)::float AS gpa
+        FROM enrollments e
+        JOIN course_offerings co ON co.id = e.course_offering_id
+        JOIN terms t ON t.id = co.term_id
+        JOIN students s ON s.id = e.student_id
+        WHERE s.mssv = ANY(%s)
+        GROUP BY s.mssv, t.term_code
+        ORDER BY s.mssv, t.term_code
+        """,
+        (selected_ids,),
+    )
+
+    term_codes = sorted({row["termCode"] for row in trend_rows}, key=term_order)
+    trends_by_student: dict[str, dict[str, float]] = {}
+    for row in trend_rows:
+        trends_by_student.setdefault(row["mssv"], {})[row["termCode"]] = float(
+            row["gpa"] or 0
+        )
+
+    return {
+        "termCodes": term_codes,
+        "students": [
+            {
+                "mssv": row["mssv"],
+                "fullName": row["fullName"],
+                "classCode": row["classCode"],
+                "currentGpa": float(row["currentGpa"] or 0),
+                "series": [
+                    {
+                        "termCode": term_code,
+                        "gpa": trends_by_student.get(row["mssv"], {}).get(term_code),
+                    }
+                    for term_code in term_codes
+                ],
+            }
+            for row in student_rows
+        ],
+        "availableStudents": available_students,
+    }
+
+
+def credit_progress_data(mssv: str) -> dict[str, float]:
+    row = query_one(
+        """
+        WITH target_student AS (
+          SELECT s.id, cl.required_credits
+          FROM students s
+          JOIN classes cl ON cl.id = s.class_id
+          WHERE s.mssv = %s
+        ),
+        course_state AS (
+          SELECT
+            c.course_code,
+            c.credits,
+            BOOL_OR(e.passed) AS has_passed,
+            BOOL_OR(e.passed = false OR e.final_score < 5) AS has_failed
+          FROM target_student ts
+          JOIN enrollments e ON e.student_id = ts.id
+          JOIN course_offerings co ON co.id = e.course_offering_id
+          JOIN courses c ON c.id = co.course_id
+          GROUP BY c.course_code, c.credits
+        )
+        SELECT
+          COALESCE(SUM(CASE WHEN cs.has_passed THEN cs.credits ELSE 0 END), 0)::float AS completed,
+          MAX(ts.required_credits)::float AS required,
+          COALESCE(SUM(CASE WHEN cs.has_failed AND NOT cs.has_passed THEN cs.credits ELSE 0 END), 0)::float AS debt
+        FROM target_student ts
+        LEFT JOIN course_state cs ON true
+        GROUP BY ts.id
+        """,
+        (mssv,),
+    )
+    return {
+        "completed": float((row or {}).get("completed") or 0),
+        "required": float((row or {}).get("required") or 0),
+        "debt": float((row or {}).get("debt") or 0),
+    }
+
+
+def risk_profile_data(user: CurrentUser, mssv: str) -> dict[str, Any] | None:
+    return next((item for item in fetch_risk_students(user) if item["mssv"] == mssv), None)
+
+
+def notes_data(mssv: str, limit: int | None = None) -> list[dict[str, Any]]:
+    sql = """
+        SELECT n.note, n.created_at
+        FROM advisory_notes n
+        JOIN students s ON s.id = n.student_id
+        WHERE s.mssv = %s
+        ORDER BY n.created_at DESC
+    """
+    params: list[Any] = [mssv]
+    if limit is not None:
+        sql += " LIMIT %s"
+        params.append(limit)
+    return query(sql, tuple(params))
+
+
+def alerts_data(student_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+    sql = """
         SELECT id, alert_type, severity, message, created_at
         FROM alerts
         WHERE student_id = %s
         ORDER BY created_at DESC
-        LIMIT 8
-        """,
-        (student["id"],),
-    )
-    notes = query(
+    """
+    params: list[Any] = [student_id]
+    if limit is not None:
+        sql += " LIMIT %s"
+        params.append(limit)
+    alerts = query(sql, tuple(params))
+    student = query_one("SELECT mssv FROM students WHERE id = %s", (student_id,))
+    if not student:
+        return alerts
+
+    report = build_academic_progress_report(student["mssv"])
+    delayed_terms = [
+        term for term in (report or {}).get("termProgress", []) if term["status"] == "delayed"
+    ]
+    if delayed_terms:
+        latest_delayed = delayed_terms[-1]
+        alerts.insert(
+            0,
+            {
+                "id": f"policy-delay-{student['mssv']}",
+                "alert_type": "academic_progress",
+                "severity": "high",
+                "message": f"Chậm tiến độ ở {latest_delayed['termCode']}: {latest_delayed['reason']}",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+    return alerts[:limit] if limit is not None else alerts
+
+
+def build_academic_progress_report(mssv: str) -> dict[str, Any] | None:
+    student = student_profile_data(mssv)
+    if not student:
+        return None
+
+    identification = identify_program(student["class_code"])
+    program = identification["program"]
+    curriculum = curriculum_courses(program)
+    curriculum_by_code = {item["code"].upper(): item for item in curriculum}
+
+    enrollments = query(
         """
-        SELECT note, created_at
-        FROM advisory_notes
-        WHERE student_id = %s
-        ORDER BY created_at DESC
-        LIMIT 10
+        SELECT
+          t.term_code,
+          t.term_name,
+          t.start_date::text AS start_date,
+          c.course_code,
+          c.course_name,
+          c.credits,
+          e.attempt_no,
+          e.is_retake,
+          e.final_score::float AS final_score,
+          e.letter_grade
+        FROM enrollments e
+        JOIN course_offerings co ON co.id = e.course_offering_id
+        JOIN courses c ON c.id = co.course_id
+        JOIN terms t ON t.id = co.term_id
+        JOIN students s ON s.id = e.student_id
+        WHERE s.mssv = %s
+        ORDER BY t.start_date, c.course_code
         """,
-        (student["id"],),
+        (mssv,),
     )
-    risk_profile = next(
-        (item for item in fetch_risk_students(user) if item["mssv"] == mssv), None
+
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in enrollments:
+        bucket = buckets.setdefault(
+            row["term_code"],
+            {
+                "termName": row["term_name"],
+                "startDate": row["start_date"],
+                "rows": [],
+            },
+        )
+        bucket["rows"].append(row)
+
+    sorted_terms = sorted(
+        buckets.items(),
+        key=lambda item: (term_order(item[0]), item[1]["startDate"]),
     )
-    completed = float(credit_progress["completed"] or 0)
-    required = float(credit_progress["required"] or 0)
+
+    term_index_by_code = {term_code: term_order(term_code) for term_code, _ in sorted_terms}
+    completed_term_codes = {term_code for term_code, _ in sorted_terms[:-1]}
+    attempts: dict[str, list[dict[str, Any]]] = {}
+    for row in enrollments:
+        if row["term_code"] not in completed_term_codes:
+            continue
+        attempts.setdefault(row["course_code"].upper(), []).append(row)
+
+    failed_courses = []
+    for course_code, rows in attempts.items():
+        failed_rows = [row for row in rows if failed_by_policy(row)]
+        if failed_rows:
+            failed_row = min(
+                failed_rows,
+                key=lambda row: (
+                    term_index_by_code.get(row["term_code"], 999),
+                    int(row.get("attempt_no") or 1),
+                ),
+            )
+            failed_order = (
+                term_index_by_code.get(failed_row["term_code"], 999),
+                int(failed_row.get("attempt_no") or 1),
+            )
+            retake_rows = [
+                row
+                for row in rows
+                if (
+                    term_index_by_code.get(row["term_code"], 999),
+                    int(row.get("attempt_no") or 1),
+                )
+                > failed_order
+            ]
+            passed_retake = next(
+                (row for row in retake_rows if passed_by_policy(row)),
+                None,
+            )
+            failed_courses.append(
+                {
+                    "termCode": failed_row["term_code"],
+                    "courseCode": course_code,
+                    "courseName": failed_row["course_name"],
+                    "credits": int(failed_row["credits"]),
+                    "finalScore": float(failed_row["final_score"]),
+                    "letterGrade": failed_row["letter_grade"],
+                    "retaken": bool(retake_rows),
+                    "resolved": passed_retake is not None,
+                    "retakeTermCode": passed_retake["term_code"] if passed_retake else None,
+                    "retakeScore": float(passed_retake["final_score"]) if passed_retake else None,
+                }
+            )
+
+    cumulative = 0
+    passed_graduation_work = False
+    term_progress: list[dict[str, Any]] = []
+    total_required_credits = 129 if program == "ATTT" else 130 if program == "MMTTTDL" else None
+    for term_code, bucket in sorted_terms:
+        index = term_order(term_code)
+        registered = sum(int(row["credits"]) for row in bucket["rows"])
+        passed = sum(int(row["credits"]) for row in bucket["rows"] if passed_by_policy(row))
+        cumulative += passed
+        current_passed_graduation_work = any(
+            row["course_code"].upper() in GRADUATION_WORK_CODES and passed_by_policy(row)
+            for row in bucket["rows"]
+        )
+        passed_graduation_work = passed_graduation_work or current_passed_graduation_work
+        expected_cumulative = index * 17
+        if total_required_credits is not None:
+            expected_cumulative = min(expected_cumulative, total_required_credits)
+        graduation_work_deferred = (
+            total_required_credits is not None
+            and cumulative >= total_required_credits - 10
+            and not passed_graduation_work
+        )
+        delayed_by_cumulative = cumulative < expected_cumulative and not graduation_work_deferred
+        valid = not delayed_by_cumulative
+        if delayed_by_cumulative:
+            term_status = "delayed"
+            reason = f"Lũy kế đạt {cumulative} TC, thấp hơn mốc {expected_cumulative} TC của HK{index}."
+        elif graduation_work_deferred:
+            term_status = "normal"
+            reason = "Đã hoàn tất các học phần còn thiếu, chỉ còn khóa luận tốt nghiệp ở kỳ sau."
+        else:
+            term_status = "normal"
+            reason = f"Lũy kế đạt {cumulative} TC, đạt mốc {expected_cumulative} TC của HK{index}."
+
+        term_progress.append(
+            {
+                "termIndex": index,
+                "termCode": term_code,
+                "termName": bucket["termName"],
+                "registeredCredits": registered,
+                "passedCredits": passed,
+                "cumulativePassedCredits": cumulative,
+                "validRegistration": valid,
+                "status": term_status,
+                "reason": reason,
+            }
+        )
+
+    taken_codes = {row["course_code"].upper() for row in enrollments}
+    latest_actual_term_index = term_order(sorted_terms[-1][0]) if sorted_terms else 0
+    missing_cutoff = max(0, latest_actual_term_index - 1)
+    missing_courses = [
+        item
+        for item in curriculum
+        if item["term"] <= missing_cutoff and item["code"].upper() not in taken_codes
+    ]
+    missing_courses.sort(key=lambda item: (item["term"], item["code"]))
+
+    current_term = sorted_terms[-1] if sorted_terms else None
+    current_credits = (
+        sum(int(row["credits"]) for row in current_term[1]["rows"]) if current_term else 0
+    )
+    current_has_graduation_work = (
+        any(is_graduation_work(row) for row in current_term[1]["rows"])
+        if current_term
+        else False
+    )
+    current_term_index = term_index_by_code.get(current_term[0], 0) if current_term else 0
+    current_standard_credits = sum(
+        int(item["credits"]) for item in curriculum if item["term"] == current_term_index
+    )
+    current_is_graduation_wrapup = (
+        total_required_credits is not None
+        and cumulative >= total_required_credits - 10
+    )
+    current_credit_floor_applies = not current_has_graduation_work and not current_is_graduation_wrapup and (
+        not curriculum or current_standard_credits >= MIN_MAIN_TERM_CREDITS
+    )
+    additional_needed = (
+        max(0, MIN_MAIN_TERM_CREDITS - current_credits)
+        if current_credit_floor_applies
+        else 0
+    )
+
+    unresolved_failed_codes = {
+        item["courseCode"] for item in failed_courses if not item["resolved"]
+    }
+    suggested = [
+        curriculum_by_code[code]
+        for code in unresolved_failed_codes
+        if code in curriculum_by_code
+    ]
+    catchup_or_current = [
+        item
+        for item in curriculum
+        if item["code"].upper() not in taken_codes
+        and item["group"] in {"Cơ sở ngành", "Chuyên ngành"}
+        and item["term"] <= max(current_term_index + 1, 1)
+    ]
+    next_courses = [
+        item
+        for item in curriculum
+        if item["code"].upper() not in taken_codes
+        and item["group"] in {"Cơ sở ngành", "Chuyên ngành"}
+        and item["term"] > current_term_index + 1
+    ]
+    suggested_codes: set[str] = set()
+    suggested_courses = []
+    for item in [*suggested, *catchup_or_current, *next_courses]:
+        if item["code"] in suggested_codes:
+            continue
+        suggested_codes.add(item["code"])
+        suggested_courses.append(item)
+        if len(suggested_courses) >= 8:
+            break
+
+    return {
+        "student": {
+            "id": student["id"],
+            "mssv": student["mssv"],
+            "fullName": student["full_name"],
+            "classCode": student["class_code"],
+        },
+        "identification": identification,
+        "baseline": {
+            "totalCredits": total_required_credits,
+            "timelineAvailable": bool(curriculum),
+            "note": "Baseline được tính theo danh mục môn UIT đã seed cho ATTT và MMT&TTDL.",
+        },
+        "termProgress": term_progress,
+        "failedCourses": failed_courses,
+        "missingCourses": {
+            "status": "computed" if curriculum else "unknown_program",
+            "note": (
+                "Các môn trong baseline từ những học kỳ đã hoàn tất chưa thấy trong bảng điểm."
+                if missing_courses
+                else "Không có môn nào trong baseline của các học kỳ đã hoàn tất bị bỏ qua."
+            )
+            if curriculum
+            else "Không thể tính môn chưa học vì chưa xác định được ngành theo policy mã lớp.",
+            "items": missing_courses,
+        },
+        "currentRegistration": {
+            "termCode": current_term[0] if current_term else None,
+            "currentCredits": current_credits,
+            "minimumCredits": MIN_MAIN_TERM_CREDITS,
+            "additionalCreditsNeeded": additional_needed,
+            "recommendationNote": (
+                f"Cần đăng ký thêm tối thiểu {additional_needed} tín chỉ để đạt ngưỡng {MIN_MAIN_TERM_CREDITS} tín chỉ."
+                if additional_needed > 0
+                else (
+                    "Kỳ hiện tại có khóa luận/chuyên đề hoặc định mức chuẩn dưới 14 tín chỉ nên không yêu cầu đăng ký thêm để đủ sàn."
+                    if not current_credit_floor_applies
+                    else "Khối lượng tín chỉ hiện tại đã đạt ngưỡng tối thiểu."
+                )
+            ),
+            "suggestedCourses": suggested_courses,
+        },
+    }
+
+
+@app.get("/students/{mssv}/profile")
+def student_profile(
+    mssv: str, user: CurrentUser = Depends(require_auth)
+) -> dict[str, Any]:
+    if not can_access_student(user, mssv):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+        )
+    student = student_profile_data(mssv)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
+        )
+    return student
+
+
+@app.get("/students/{mssv}/gpa-trend")
+def student_gpa_trend(
+    mssv: str, user: CurrentUser = Depends(require_auth)
+) -> list[dict[str, Any]]:
+    if not can_access_student(user, mssv):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+        )
+    return gpa_trend_data(mssv)
+
+
+@app.get("/students/{mssv}/grades")
+def student_grades(
+    mssv: str, user: CurrentUser = Depends(require_auth)
+) -> dict[str, Any]:
+    if not can_access_student(user, mssv):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+        )
+    grades = student_grades_data(mssv)
+    if not grades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
+        )
+    return grades
+
+
+@app.get("/students/{mssv}/credit-progress")
+def student_credit_progress(
+    mssv: str, user: CurrentUser = Depends(require_auth)
+) -> dict[str, float]:
+    if not can_access_student(user, mssv):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+        )
+    return credit_progress_data(mssv)
+
+
+@app.get("/students/{mssv}/risk-profile")
+def student_risk_profile(
+    mssv: str, user: CurrentUser = Depends(require_auth)
+) -> dict[str, Any] | None:
+    if not can_access_student(user, mssv):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+        )
+    return risk_profile_data(user, mssv)
+
+
+@app.get("/students/{mssv}/notes")
+def student_notes(
+    mssv: str, user: CurrentUser = Depends(require_auth)
+) -> list[dict[str, Any]]:
+    if not can_access_student(user, mssv):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+        )
+    return notes_data(mssv)
+
+
+@app.get("/students/{mssv}/academic-progress")
+def student_academic_progress(
+    mssv: str, user: CurrentUser = Depends(require_auth)
+) -> dict[str, Any]:
+    if not can_access_student(user, mssv):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+        )
+    report = build_academic_progress_report(mssv)
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
+        )
+    write_audit_log(user, "view_academic_progress", "student", mssv)
+    return report
+
+
+@app.get("/students/{mssv}/dashboard")
+def student_dashboard(
+    mssv: str, user: CurrentUser = Depends(require_auth)
+) -> dict[str, Any]:
+    if not can_access_student(user, mssv):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
+        )
+    student = student_profile_data(mssv)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
+        )
+    gpa_trend = gpa_trend_data(mssv)
+    credit_progress = credit_progress_data(mssv)
+    alerts = alerts_data(student["id"], limit=8)
+    notes = notes_data(mssv, limit=10)
+    risk_profile = risk_profile_data(user, mssv)
     return {
         "student": {
             "id": student["id"],
             "mssv": student["mssv"],
             "full_name": student["full_name"],
             "class_code": student["class_code"],
+            "academic_status": student["academic_status"],
         },
         "gpaTrend": gpa_trend,
-        "creditProgress": {
-            "completed": completed,
-            "required": required,
-            "debt": max(required - completed, 0),
-        },
+        "creditProgress": credit_progress,
         "alerts": alerts,
         "notes": notes,
         "riskProfile": risk_profile,
@@ -985,11 +2357,12 @@ def student_alerts(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden student scope"
         )
-    student = query_one("SELECT id FROM students WHERE mssv = %s", (mssv,))
-    return query(
-        "SELECT * FROM alerts WHERE student_id = %s ORDER BY created_at DESC",
-        (student["id"],),
-    )
+    student = student_profile_data(mssv)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
+        )
+    return alerts_data(student["id"])
 
 
 @app.post("/students/{mssv}/notes")
@@ -1057,7 +2430,7 @@ def graduation_forecast(user: CurrentUser = Depends(require_auth)) -> dict[str, 
         [
             item
             for item in students
-            if item["completionRatio"] >= 0.75 and item["currentGpa"] >= 5
+            if item["completionRatio"] >= 75 and item["currentGpa"] >= 5
         ]
     )
     watchlist = len(
@@ -1141,7 +2514,7 @@ def predictive_matrix(
                 "mssv": item["mssv"],
                 "fullName": item["fullName"],
                 "classCode": item["classCode"],
-                "x": round(item["completionRatio"] * 100, 1),
+                "x": round(item["completionRatio"], 1),
                 "y": item["currentGpa"],
                 "risk": item["delayRiskScore"],
                 "quadrant": item["quadrant"],
@@ -1156,6 +2529,16 @@ def predictive_matrix(
             "healthy": "Vung an toan",
         },
     }
+
+
+@app.get("/ai/predictive/gpa-lines")
+def predictive_gpa_lines(
+    classCode: str | None = None,
+    mssv: str | None = None,
+    limit: int = 5,
+    user: CurrentUser = Depends(require_auth),
+) -> dict[str, Any]:
+    return gpa_lines_data(user, classCode, mssv, limit)
 
 
 @app.get("/ai/anomalies/patterns")
@@ -1265,10 +2648,27 @@ def anomaly_briefs(user: CurrentUser = Depends(require_auth)) -> list[dict[str, 
 def chat_to_data(
     payload: ChatPayload, user: CurrentUser = Depends(require_auth)
 ) -> dict[str, Any]:
+    conversational_answer = small_talk_answer(payload.message)
+    if conversational_answer:
+        return {
+            "mode": "assistant",
+            "message": payload.message,
+            "plan": {"tool": "small_talk", "params": {}},
+            "answer": conversational_answer,
+            "sqlPreview": None,
+            "rows": [],
+            "visualization": {"type": "none"},
+            "llmEnabled": any(
+                resolve_llm(provider) is not None for provider in provider_order()
+            ),
+            "provider": LLM_PROVIDER,
+        }
+
     class_codes = [row["class_code"] for row in get_accessible_classes(user)]
     plan = plan_chat_query(payload.message, class_codes)
     result = execute_chat_plan(plan, user)
     return {
+        "mode": "data",
         "message": payload.message,
         "plan": plan,
         "answer": result["answer"],
@@ -1282,9 +2682,30 @@ def chat_to_data(
     }
 
 
+@app.get("/admin/import-jobs/recent")
+def recent_import_jobs(user: CurrentUser = Depends(require_auth)) -> list[dict[str, Any]]:
+    return query(
+        """
+        SELECT
+          id::text,
+          source_name AS "sourceName",
+          status,
+          started_at::text AS "startedAt",
+          finished_at::text AS "finishedAt",
+          records_processed::int AS "recordsProcessed",
+          error_message AS "errorMessage",
+          created_by AS "createdBy",
+          created_at::text AS "createdAt"
+        FROM import_jobs
+        ORDER BY created_at DESC
+        LIMIT 12
+        """
+    )
+
+
 @app.post("/admin/import-jobs/trigger")
 def trigger_import(
-    payload: ImportPayload, user: CurrentUser = Depends(require_roles("DEAN_ADMIN"))
+    payload: ImportPayload, user: CurrentUser = Depends(require_roles("DEAN_ADMIN", "LECTURER"))
 ) -> dict[str, Any]:
     row = query_one(
         """

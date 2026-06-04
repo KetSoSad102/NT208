@@ -9,7 +9,7 @@ function letterGrade(score: number): string {
   if (score >= 8.5) return 'A';
   if (score >= 7.0) return 'B';
   if (score >= 5.5) return 'C';
-  if (score >= 4.0) return 'D';
+  if (score >= 5.0) return 'D';
   return 'F';
 }
 
@@ -69,24 +69,31 @@ async function processPayload(jobId: string, client: DAAClient): Promise<number>
           (SELECT id FROM courses WHERE course_code = $1),
           (SELECT id FROM terms WHERE term_code = $2),
           (SELECT id FROM classes WHERE class_code = $3),
-          'Imported Lecturer'
+          $4
         )
-        ON CONFLICT (course_id, term_id, class_id) DO NOTHING
+        ON CONFLICT (course_id, term_id, class_id) DO UPDATE SET
+          lecturer_name = EXCLUDED.lecturer_name
       `,
-      [row.courseCode, row.termCode, row.classCode],
+      [row.courseCode, row.termCode, row.classCode, row.lecturerName],
     );
 
+    const overallScore = row.overallScore ?? row.finalScore;
     await pool.query(
       `
         INSERT INTO enrollments (
           student_id,
           course_offering_id,
           attempt_no,
+          process_score,
           midterm_score,
+          practical_score,
           final_score,
+          overall_score,
           letter_grade,
           passed,
-          is_retake
+          is_retake,
+          synced_at,
+          source_system
         )
         VALUES (
           (SELECT id FROM students WHERE mssv = $1),
@@ -106,26 +113,40 @@ async function processPayload(jobId: string, client: DAAClient): Promise<number>
           $6,
           $7,
           $8,
-          $9
+          $9,
+          $10,
+          $11,
+          $12,
+          NOW(),
+          $13
         )
         ON CONFLICT (student_id, course_offering_id)
         DO UPDATE SET
+          process_score = EXCLUDED.process_score,
           final_score = EXCLUDED.final_score,
           midterm_score = EXCLUDED.midterm_score,
+          practical_score = EXCLUDED.practical_score,
+          overall_score = EXCLUDED.overall_score,
           letter_grade = EXCLUDED.letter_grade,
           passed = EXCLUDED.passed,
-          is_retake = EXCLUDED.is_retake
+          is_retake = EXCLUDED.is_retake,
+          synced_at = NOW(),
+          source_system = EXCLUDED.source_system
       `,
       [
         row.mssv,
         row.courseCode,
         row.termCode,
         row.classCode,
-        Math.max(0, Math.min(10, row.finalScore - 0.5)),
+        row.processScore ?? row.midtermScore,
+        row.midtermScore,
+        row.practicalScore ?? row.midtermScore,
         row.finalScore,
-        letterGrade(row.finalScore),
-        row.finalScore >= 4,
-        row.finalScore < 4,
+        overallScore,
+        letterGrade(overallScore),
+        overallScore >= 5,
+        overallScore < 5,
+        payload.sourceName,
       ],
     );
 
@@ -137,7 +158,7 @@ async function processPayload(jobId: string, client: DAAClient): Promise<number>
       UPDATE students s
       SET current_gpa = stats.avg_score
       FROM (
-        SELECT student_id, ROUND(AVG(final_score)::numeric, 2) AS avg_score
+        SELECT student_id, ROUND(AVG(COALESCE(overall_score, final_score))::numeric, 2) AS avg_score
         FROM enrollments
         GROUP BY student_id
       ) AS stats

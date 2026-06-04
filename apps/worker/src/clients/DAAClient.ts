@@ -6,7 +6,12 @@ export interface DAAStudentResult {
   courseCode: string;
   courseName: string;
   credits: number;
+  processScore?: number;
+  midtermScore: number;
+  practicalScore?: number;
   finalScore: number;
+  overallScore: number;
+  lecturerName: string;
 }
 
 export interface DAAPayload {

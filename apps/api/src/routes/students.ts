@@ -136,6 +136,171 @@ studentsRouter.get('/:mssv/dashboard', async (req: AuthRequest, res) => {
   });
 });
 
+studentsRouter.get('/:mssv/profile', async (req: AuthRequest, res) => {
+  const { mssv } = req.params;
+  const allowed = await canAccessStudent(req, mssv);
+  if (!allowed) {
+    res.status(403).json({ message: 'Forbidden' });
+    return;
+  }
+
+  const student = await pool.query(
+    `
+      SELECT
+        s.id,
+        s.mssv,
+        s.full_name,
+        s.current_gpa::float8 AS current_gpa,
+        s.english_level,
+        s.cohort_year,
+        s.program_code,
+        s.training_system,
+        s.academic_status,
+        c.class_code,
+        c.class_name
+      FROM students s
+      JOIN classes c ON c.id = s.class_id
+      WHERE s.mssv = $1
+    `,
+    [mssv],
+  );
+  if (student.rowCount === 0) {
+    res.status(404).json({ message: 'Student not found' });
+    return;
+  }
+  res.json(student.rows[0]);
+});
+
+studentsRouter.get('/:mssv/gpa-trend', async (req: AuthRequest, res) => {
+  const { mssv } = req.params;
+  const allowed = await canAccessStudent(req, mssv);
+  if (!allowed) {
+    res.status(403).json({ message: 'Forbidden' });
+    return;
+  }
+
+  const gpaTrend = await pool.query<{ term_code: string; gpa: string }>(
+    `
+      SELECT t.term_code, ROUND(AVG(e.final_score)::numeric, 2)::text AS gpa
+      FROM enrollments e
+      JOIN course_offerings co ON co.id = e.course_offering_id
+      JOIN terms t ON t.id = co.term_id
+      JOIN students s ON s.id = e.student_id
+      WHERE s.mssv = $1
+      GROUP BY t.term_code
+      ORDER BY t.term_code
+    `,
+    [mssv],
+  );
+
+  res.json(gpaTrend.rows.map((row) => ({ termCode: row.term_code, gpa: Number(row.gpa) })));
+});
+
+studentsRouter.get('/:mssv/credit-progress', async (req: AuthRequest, res) => {
+  const { mssv } = req.params;
+  const allowed = await canAccessStudent(req, mssv);
+  if (!allowed) {
+    res.status(403).json({ message: 'Forbidden' });
+    return;
+  }
+
+  const creditProgress = await pool.query<{ completed: string; required: string; debt: string }>(
+    `
+      WITH target_student AS (
+        SELECT s.id, cl.required_credits
+        FROM students s
+        JOIN classes cl ON cl.id = s.class_id
+        WHERE s.mssv = $1
+      ),
+      course_state AS (
+        SELECT
+          c.course_code,
+          c.credits,
+          BOOL_OR(e.passed) AS has_passed,
+          BOOL_OR(e.passed = false OR e.final_score < 5) AS has_failed
+        FROM target_student ts
+        JOIN enrollments e ON e.student_id = ts.id
+        JOIN course_offerings co ON co.id = e.course_offering_id
+        JOIN courses c ON c.id = co.course_id
+        GROUP BY c.course_code, c.credits
+      )
+      SELECT
+        COALESCE(SUM(CASE WHEN cs.has_passed THEN cs.credits ELSE 0 END), 0)::text AS completed,
+        MAX(ts.required_credits)::text AS required,
+        COALESCE(SUM(CASE WHEN cs.has_failed AND NOT cs.has_passed THEN cs.credits ELSE 0 END), 0)::text AS debt
+      FROM target_student ts
+      LEFT JOIN course_state cs ON true
+      GROUP BY ts.id
+    `,
+    [mssv],
+  );
+
+  const credits = creditProgress.rows[0] ?? { completed: '0', required: '0', debt: '0' };
+  res.json({
+    completed: Number(credits.completed),
+    required: Number(credits.required),
+    debt: Number(credits.debt),
+  });
+});
+
+studentsRouter.get('/:mssv/risk-profile', async (req: AuthRequest, res) => {
+  const { mssv } = req.params;
+  const allowed = await canAccessStudent(req, mssv);
+  if (!allowed) {
+    res.status(403).json({ message: 'Forbidden' });
+    return;
+  }
+
+  const riskProfile = await pool.query<{
+    delay_risk_score: string;
+    risk_band: string;
+    quadrant: string;
+    recommended_action: string;
+  }>(
+    `
+      SELECT rs.delay_risk_score::text, rs.risk_band, rs.quadrant, rs.recommended_action
+      FROM risk_snapshots rs
+      JOIN students s ON s.id = rs.student_id
+      WHERE s.mssv = $1
+      ORDER BY rs.created_at DESC
+      LIMIT 1
+    `,
+    [mssv],
+  );
+
+  res.json(
+    riskProfile.rowCount
+      ? {
+          delayRiskScore: Number(riskProfile.rows[0].delay_risk_score),
+          riskBand: riskProfile.rows[0].risk_band,
+          quadrant: riskProfile.rows[0].quadrant,
+          recommendedAction: riskProfile.rows[0].recommended_action,
+        }
+      : null,
+  );
+});
+
+studentsRouter.get('/:mssv/notes', async (req: AuthRequest, res) => {
+  const { mssv } = req.params;
+  const allowed = await canAccessStudent(req, mssv);
+  if (!allowed) {
+    res.status(403).json({ message: 'Forbidden' });
+    return;
+  }
+
+  const notes = await pool.query(
+    `
+      SELECT n.note, n.created_at
+      FROM advisory_notes n
+      JOIN students s ON s.id = n.student_id
+      WHERE s.mssv = $1
+      ORDER BY n.created_at DESC
+    `,
+    [mssv],
+  );
+  res.json(notes.rows);
+});
+
 studentsRouter.get('/:mssv/alerts', async (req: AuthRequest, res) => {
   const { mssv } = req.params;
   const allowed = await canAccessStudent(req, mssv);

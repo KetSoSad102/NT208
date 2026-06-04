@@ -40,11 +40,14 @@ Luu y: backend TypeScript cu o apps/api duoc giu lai de tham khao, nhung service
 Thiet ke nay bo cac bang trung gian khong can thiet cho do an nhu `advisors`, `advisor_assignments`, `final_results`, `assessment_scores`, `assessment_components`, `curriculum_plan`, `raw_import_snapshots`.
 
 ## 4) Gia dinh du lieu va tai khoan mau
-- DAA duoc mock bang JSON fixture: apps/worker/src/fixtures/mock-daa.json
+- DAA la external demo system, chi dong vai tro nguon diem ben ngoai de minh hoa auto-fetch/sync vao CVHT.
+- DAA demo co UI rieng tren port 5174 va API snapshot rieng tai `/daa-demo/api/snapshot`.
+- Worker co the dung MockDAAClient qua fixture `apps/worker/src/fixtures/mock-daa.json` hoac RealDAAClient fetch tu API DAA demo.
 - Tai khoan test trong bang users:
   - dean_admin / admin123
   - advisor_1 / advisor123
-- Moi lop hien dat `required_credits = 36`
+  - lecturer_demo / lecturer123
+- Lop ATTT dat 129 tin chi, lop MMT&TTDL dat 130 tin chi theo seed hien tai.
 
 ## 5) Chay nhanh bang Docker (khuyen nghi)
 Chay toan bo he thong:
@@ -69,6 +72,7 @@ docker compose --profile cache up --build
 Endpoints sau khi chay:
 - API health: http://localhost:3000/health
 - Web: http://localhost:5173
+- DAA demo UI: http://localhost:5174
 
 Neu can bat AI planner/summarizer bang API key rieng, them vao `.env`:
 
@@ -85,6 +89,11 @@ LLM_BASE_URL=https://api.openai.com/v1
 # LLM_API_KEY=your_trollllm_key
 # LLM_BASE_URL=https://chat.trollllm.xyz/v1
 # LLM_MODEL=gpt-5.4
+DAA_DEMO_TOKEN=demo-daa-token
+DAA_SYNC_CRON=0 23 30 6,12 *
+DAA_CLIENT_MODE=real
+DAA_BASE_URL=http://api:3000
+DAA_API_TOKEN=demo-daa-token
 ```
 
 ## 6) Chay local khong Docker
@@ -116,6 +125,10 @@ Set bien moi truong toi thieu:
 - DATABASE_URL
 - JWT_SECRET
 - JWT_EXPIRES_IN
+- DAA_SYNC_CRON
+- DAA_CLIENT_MODE
+- DAA_BASE_URL
+- DAA_API_TOKEN
 - LLM_PROVIDER
 - LLM_API_KEY
 - LLM_MODEL
@@ -148,6 +161,12 @@ npm run dev:worker
 npm run dev:web
 ```
 
+Neu muon chay rieng web DAA demo o port 5174:
+
+```bash
+VITE_PORT=5174 VITE_DEFAULT_ROUTE=/daa-demo VITE_API_BASE_URL=http://localhost:3000 npm run dev -w apps/web
+```
+
 ## 7) API endpoints chinh
 - Auth
   - POST /auth/login
@@ -170,7 +189,13 @@ npm run dev:web
   - GET /ai/anomalies/patterns
   - POST /ai/chat-to-data (ho tro `mode`: `auto` | `data` | `assistant`)
 - Admin
+  - GET /admin/import-jobs/recent
   - POST /admin/import-jobs/trigger
+- DAA demo
+  - GET /daa-demo/offerings
+  - GET /daa-demo/offerings/:offeringId/students
+  - GET /daa-demo/offerings/:offeringId/students/:mssv/grades
+  - GET /daa-demo/api/snapshot
 - Health
   - GET /health
 
@@ -188,18 +213,31 @@ npm run dev:web
   - Student Risk Matrix 4 goc phan tu
   - de xuat hanh dong can thiep cho CVHT
 
-## 9) Ingestion pipeline
-- Interface DAAClient + MockDAAClient
+## 9) Ingestion pipeline va DAA sync
+- Interface DAAClient + MockDAAClient + RealDAAClient
+- `DAA_CLIENT_MODE=mock` dung fixture local; `DAA_CLIENT_MODE=real` fetch tu `DAA_BASE_URL`.
+- Cron cau hinh qua `DAA_SYNC_CRON`, mac dinh co the dat `0 23 30 6,12 *` de chay cuoi hoc ky.
 - Trang thai job: queued -> running -> success/fail trong import_jobs
 - Retry toi da 3 lan khi gap loi parser/upsert
 - Upsert truc tiep vao `classes`, `students`, `courses`, `course_offerings`, `enrollments`
+- Dong bo cac cot diem: `process_score`, `midterm_score`, `practical_score`, `final_score`, `overall_score`, `synced_at`, `source_system`
 - Sau ingestion, worker cap nhat `current_gpa`, tao `alerts` GPA drop va `risk_snapshots`
+- Trigger thu cong:
+
+```bash
+curl -X POST http://localhost:3000/admin/import-jobs/trigger \
+  -H "Authorization: Bearer <dean_admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"sourceName":"daa_demo_manual"}'
+```
 
 ## 10) Bao mat
 - JWT auth voi Authorization: Bearer token
-- RBAC roles: DEAN_ADMIN, ADVISOR
+- RBAC roles: DEAN_ADMIN, ADVISOR, LECTURER
 - Object-level authorization:
   - ADVISOR chi truy cap lop duoc gan va sinh vien thuoc lop do
+  - LECTURER chi xem hoc phan minh phu trach va sinh vien trong hoc phan do
+- DAA snapshot dung token header `X-DAA-Token`, cau hinh qua env, khong hardcode secret/cookie vao source.
 - Audit log:
   - VIEW_DASHBOARD
   - CREATE_NOTE

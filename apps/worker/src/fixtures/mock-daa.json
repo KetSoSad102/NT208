@@ -3,34 +3,49 @@
   "generatedAt": "2026-03-26T00:00:00Z",
   "results": [
     {
-      "mssv": "SV001",
-      "fullName": "Sinh vien 1",
-      "classCode": "CNTT-K18A",
-      "termCode": "2025-2",
-      "courseCode": "DBI201",
-      "courseName": "Co so du lieu",
-      "credits": 3,
-      "finalScore": 3.2
+      "mssv": "24520349",
+      "fullName": "Phan Lâm Dũng",
+      "classCode": "ATTN2024",
+      "termCode": "HK4",
+      "courseCode": "NT101",
+      "courseName": "An toàn mạng",
+      "credits": 4,
+      "processScore": 8.4,
+      "midtermScore": 8.1,
+      "practicalScore": 8.7,
+      "finalScore": 8.5,
+      "overallScore": 8.5,
+      "lecturerName": "Giảng viên Demo DAA"
     },
     {
-      "mssv": "SV031",
-      "fullName": "Sinh vien 31",
-      "classCode": "CNTT-K18A",
-      "termCode": "2025-2",
-      "courseCode": "SE201",
-      "courseName": "Ky thuat phan mem",
-      "credits": 3,
-      "finalScore": 7.1
+      "mssv": "24520349",
+      "fullName": "Phan Lâm Dũng",
+      "classCode": "ATTN2024",
+      "termCode": "HK4",
+      "courseCode": "NT102",
+      "courseName": "Quản trị mạng và hệ thống",
+      "credits": 4,
+      "processScore": 7.8,
+      "midtermScore": 7.5,
+      "practicalScore": 8.0,
+      "finalScore": 7.9,
+      "overallScore": 7.9,
+      "lecturerName": "Giảng viên Demo DAA"
     },
     {
-      "mssv": "SV032",
-      "fullName": "Sinh vien 32",
-      "classCode": "CNTT-K18B",
-      "termCode": "2025-2",
-      "courseCode": "NET201",
-      "courseName": "Mang may tinh",
-      "credits": 3,
-      "finalScore": 5.2
+      "mssv": "24520001",
+      "fullName": "Sinh viên Demo",
+      "classCode": "ATTT2024.1",
+      "termCode": "HK4",
+      "courseCode": "NT101",
+      "courseName": "An toàn mạng",
+      "credits": 4,
+      "processScore": 6.2,
+      "midtermScore": 5.8,
+      "practicalScore": 6.5,
+      "finalScore": 6.1,
+      "overallScore": 6.1,
+      "lecturerName": "Giảng viên Demo DAA"
     }
   ]
 }

@@ -29,7 +29,8 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     const text = await res.text();
     let parsedMessage = '';
     try {
-      parsedMessage = JSON.parse(text)?.message ?? '';
+      const parsed = JSON.parse(text);
+      parsedMessage = parsed?.message ?? parsed?.detail ?? '';
     } catch {
       parsedMessage = '';
     }
