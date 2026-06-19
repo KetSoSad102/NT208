@@ -2,9 +2,10 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import bcrypt
 import jwt
 import psycopg2
 from dotenv import load_dotenv
@@ -17,6 +18,7 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "supersecret_supersecret")
+JWT_EXPIRES_IN = os.getenv("JWT_EXPIRES_IN", "12h")
 DAA_DEMO_TOKEN = os.getenv("DAA_DEMO_TOKEN", "")
 
 if not DATABASE_URL:
@@ -30,6 +32,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class LoginPayload(BaseModel):
+    username: str
+    password: str
 
 @dataclass
 class CurrentUser:
@@ -50,6 +56,25 @@ def query(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
 def query_one(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
     rows = query(sql, params)
     return rows[0] if rows else None
+
+def _parse_expires_in(raw: str) -> int:
+    raw = raw.strip().lower()
+    if raw.endswith("h"):
+        return int(raw[:-1]) * 3600
+    if raw.endswith("m"):
+        return int(raw[:-1]) * 60
+    return int(raw)
+
+def sign_token(user: dict[str, Any]) -> str:
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=_parse_expires_in(JWT_EXPIRES_IN))
+    payload = {
+        "sub": str(user["id"]),
+        "username": user["username"],
+        "role": user["role"],
+        "full_name": user.get("full_name", user["username"]),
+        "exp": expires_at,
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
 def require_auth(authorization: str | None = Header(default=None)) -> CurrentUser:
     if not authorization or not authorization.startswith("Bearer "):
@@ -117,6 +142,19 @@ def can_access_offering(user: CurrentUser, offering_id: str) -> bool:
             is not None
         )
     return False
+
+@app.post("/auth/login")
+def login(payload: LoginPayload) -> dict[str, Any]:
+    user = query_one("SELECT * FROM users WHERE username = %s", (payload.username,))
+    if not user or not bcrypt.checkpw(
+        payload.password.encode("utf-8"), user["password_hash"].encode("utf-8")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Sai tai khoan hoac mat khau",
+        )
+    token = sign_token(user)
+    return {"accessToken": token}
 
 @app.get("/health")
 def health():

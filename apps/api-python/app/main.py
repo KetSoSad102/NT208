@@ -1164,7 +1164,11 @@ def build_rule_based_plan(
 
     if any(
         token in normalized
-        for token in ["ho so sinh vien", "thong tin sinh vien", "ho so sv", "thong tin sv", "profile sinh vien"]
+        for token in [
+            "ho so sinh vien", "thong tin sinh vien", "ho so sv", "thong tin sv",
+            "profile sinh vien", "tinh hinh hoc tap", "ket qua hoc tap",
+            "hoc luc", "tinh trang hoc",
+        ]
     ):
         return {"tool": "student_profile", "params": {"classCode": class_code}}
 
@@ -1234,7 +1238,7 @@ def build_rule_based_plan(
             "params": {**course, "classCode": class_code, "limit": limit},
         }
 
-    if any(token in normalized for token in ["ve", "bieu do", "pho diem", "histogram"]):
+    if any(token in normalized for token in ["ve", "bieu do", "pho diem", "histogram", "phan bo", "phan phoi"]):
         return {
             "tool": "grade_distribution",
             "params": {**course, "classCode": class_code},
@@ -1266,6 +1270,33 @@ def build_rule_based_plan(
         }
     if any(token in normalized for token in ["tong quan", "rui ro", "hoc vu"]):
         return {"tool": "risk_overview", "params": {"classCode": class_code}}
+
+    # If the message mentions a specific student name or MSSV, route to student_profile
+    has_mssv = bool(re.search(r"\b\d{8}\b", message))
+    
+    name_candidates = []
+    current_name = []
+    exclude_terms = {"lop", "mon", "giao", "vien", "sinh", "vien", "viet", "nam", "tinh", "hinh", "phan", "bo", "diem", "so", "nhap"}
+    if course["courseName"]:
+        exclude_terms.update(normalize_text(course["courseName"]).split())
+    if class_code:
+        exclude_terms.add(normalize_text(class_code))
+
+    for w in message.split():
+        clean_w = "".join(c for c in w if c.isalpha())
+        if clean_w and clean_w.istitle() and normalize_text(clean_w) not in exclude_terms:
+            current_name.append(clean_w)
+        else:
+            if len(current_name) >= 2:
+                name_candidates.append(" ".join(current_name))
+            current_name = []
+    if len(current_name) >= 2:
+        name_candidates.append(" ".join(current_name))
+        
+    has_student_name = bool(name_candidates) or has_mssv
+    if has_student_name:
+        return {"tool": "student_profile", "params": {"classCode": class_code}}
+
     return {"tool": "risk_overview", "params": {"classCode": class_code}}
 
 
@@ -1387,7 +1418,7 @@ def plan_chat_query(
         }:
             return rule_fallback
         if any(
-            token in normalized for token in ["ve", "bieu do", "pho diem", "histogram"]
+            token in normalized for token in ["ve", "bieu do", "pho diem", "histogram", "phan bo", "phan phoi"]
         ):
             params = dict(normalized_llm_plan["params"])
             params.update({k: v for k, v in rule_fallback["params"].items() if v})
@@ -1755,6 +1786,22 @@ def student_profile_rows(
     earned = float(stats.get("earned_credits") or 0)
     required = float(student.get("required_credits") or 0)
     ratio = (earned / required * 100) if required else 0
+
+    risk_info = query_one(
+        "WITH risk AS (" + RISK_SQL + ") SELECT delay_risk_score FROM risk WHERE id = %s",
+        (student["id"],)
+    )
+    risk_score = float(risk_info["delay_risk_score"]) if risk_info else 0.0
+
+    if risk_score >= 75:
+        progress_status = f"Sinh viên hiện có nguy cơ trễ tiến độ rất cao (mức rủi ro trễ hạn: {risk_score}%)."
+    elif risk_score >= 55:
+        progress_status = f"Sinh viên hiện có nguy cơ trễ tiến độ cao (mức rủi ro trễ hạn: {risk_score}%)."
+    elif risk_score >= 35:
+        progress_status = f"Sinh viên hiện có nguy cơ trễ tiến độ trung bình (mức rủi ro trễ hạn: {risk_score}%)."
+    else:
+        progress_status = f"Sinh viên hiện tại không bị chậm tiến độ (mức rủi ro trễ hạn thấp: {risk_score}%)."
+
     rows = [
         {
             "MSSV": student["mssv"],
@@ -1767,17 +1814,19 @@ def student_profile_rows(
             "Tiến độ (%)": round(ratio, 1),
             "Số môn rớt": int(stats.get("failed_count") or 0),
             "Điểm TB lượt thi": round(float(stats.get("avg_score") or 0), 2),
+            "Rủi ro trễ hạn (%)": risk_score,
         }
     ]
     answer = (
         f"{student['full_name']} ({student['mssv']}, lớp {student['class_code']}) — GPA {round(float(student.get('current_gpa') or 0), 2)}, "
-        f"đã đạt {earned:.0f}/{required:.0f} tín chỉ ({ratio:.1f}%), {int(stats.get('failed_count') or 0)} môn rớt."
+        f"đã đạt {earned:.0f}/{required:.0f} tín chỉ ({ratio:.1f}%), {int(stats.get('failed_count') or 0)} môn rớt. "
+        f"{progress_status}"
     )
     return {
         "answer": answer,
         "rows": rows,
         "visualization": {"type": "table"},
-        "sqlPreview": "-- Ho so sinh vien",
+        "sqlPreview": "-- Ho so sinh vien va muc do tre tien do",
     }
 
 
