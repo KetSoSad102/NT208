@@ -65,17 +65,20 @@ export async function getClassLeaderboard() {
 }
 
 export async function getTopKillerCoursesByClass(classId: string) {
-  const rs = await pool.query<{ course_code: string; fail_rate: string }>(`
+  const rs = await pool.query<{ course_code: string; fail_count: string }>(`
     SELECT c.course_code,
-      AVG(CASE WHEN e.passed THEN 0 ELSE 1 END)::text AS fail_rate
+      SUM(CASE WHEN e.passed = false THEN 1 ELSE 0 END)::text AS fail_count
     FROM course_offerings co
     JOIN courses c ON c.id = co.course_id
     JOIN enrollments e ON e.course_offering_id = co.id
     WHERE co.class_id = $1
     GROUP BY c.course_code
+    HAVING SUM(CASE WHEN e.passed = false THEN 1 ELSE 0 END) > 0
+    ORDER BY SUM(CASE WHEN e.passed = false THEN 1 ELSE 0 END) DESC
+    LIMIT 10;
   `, [classId]);
 
-  return topKillerCourses(rs.rows.map((r) => ({ courseCode: r.course_code, failRate: Number(r.fail_rate) })));
+  return rs.rows.map((r) => ({ courseCode: r.course_code, failCount: Number(r.fail_count) }));
 }
 
 export async function getGraduationForecast() {

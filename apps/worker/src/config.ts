@@ -10,9 +10,9 @@ const EnvSchema = z.object({
     .string()
     .default('false')
     .transform((value) => value === 'true' || value === '1'),
-  DAA_SYNC_CRON: z.string().default('0 23 30 6,12 *'),
+  DAA_SYNC_CRON: z.string().default('0 1 * * *'),
   DAA_CLIENT_MODE: z.enum(['mock', 'real']).default('mock'),
-  DAA_BASE_URL: z.string().default('http://api:3000'),
+  DAA_BASE_URL: z.string().default('http://daa-api:3000'),
   DAA_API_TOKEN: z.string().optional(),
 });
 

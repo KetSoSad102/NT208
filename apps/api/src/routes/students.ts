@@ -43,9 +43,13 @@ studentsRouter.get('/:mssv/dashboard', async (req: AuthRequest, res) => {
     return;
   }
 
-  const gpaTrend = await pool.query<{ term_code: string; gpa: string }>(
+  const gpaTrend = await pool.query<{ term_code: string; gpa: string; min_score: string; max_score: string }>(
     `
-      SELECT t.term_code, ROUND(AVG(e.final_score)::numeric, 2)::text AS gpa
+      SELECT 
+        t.term_code, 
+        ROUND(AVG(e.final_score)::numeric, 2)::text AS gpa,
+        MIN(e.final_score)::text AS min_score,
+        MAX(e.final_score)::text AS max_score
       FROM enrollments e
       JOIN course_offerings co ON co.id = e.course_offering_id
       JOIN terms t ON t.id = co.term_id
@@ -117,7 +121,12 @@ studentsRouter.get('/:mssv/dashboard', async (req: AuthRequest, res) => {
 
   res.json({
     student: student.rows[0],
-    gpaTrend: gpaTrend.rows.map((r) => ({ termCode: r.term_code, gpa: Number(r.gpa) })),
+    gpaTrend: gpaTrend.rows.map((r) => ({ 
+      termCode: r.term_code, 
+      gpa: Number(r.gpa),
+      minScore: Number(r.min_score),
+      maxScore: Number(r.max_score)
+    })),
     creditProgress: {
       completed: Number(credits.completed),
       required: Number(credits.required),
@@ -179,9 +188,13 @@ studentsRouter.get('/:mssv/gpa-trend', async (req: AuthRequest, res) => {
     return;
   }
 
-  const gpaTrend = await pool.query<{ term_code: string; gpa: string }>(
+  const gpaTrend = await pool.query<{ term_code: string; gpa: string; min_score: string; max_score: string }>(
     `
-      SELECT t.term_code, ROUND(AVG(e.final_score)::numeric, 2)::text AS gpa
+      SELECT 
+        t.term_code, 
+        ROUND(AVG(e.final_score)::numeric, 2)::text AS gpa,
+        MIN(e.final_score)::text AS min_score,
+        MAX(e.final_score)::text AS max_score
       FROM enrollments e
       JOIN course_offerings co ON co.id = e.course_offering_id
       JOIN terms t ON t.id = co.term_id
@@ -193,8 +206,14 @@ studentsRouter.get('/:mssv/gpa-trend', async (req: AuthRequest, res) => {
     [mssv],
   );
 
-  res.json(gpaTrend.rows.map((row) => ({ termCode: row.term_code, gpa: Number(row.gpa) })));
+  res.json(gpaTrend.rows.map((row) => ({ 
+    termCode: row.term_code, 
+    gpa: Number(row.gpa),
+    minScore: Number(row.min_score),
+    maxScore: Number(row.max_score)
+  })));
 });
+
 
 studentsRouter.get('/:mssv/credit-progress', async (req: AuthRequest, res) => {
   const { mssv } = req.params;

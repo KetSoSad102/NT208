@@ -30,7 +30,7 @@ const PayloadSchema = z.object({
 });
 
 export class MockDAAClient implements DAAClient {
-  async fetchSnapshot(): Promise<DAAPayload> {
+  async fetchSnapshot(cookie?: string): Promise<DAAPayload> {
     const fixturePath = path.resolve(__dirname, '../fixtures/mock-daa.json');
     const raw = await fs.readFile(fixturePath, 'utf-8');
     return PayloadSchema.parse(JSON.parse(raw));

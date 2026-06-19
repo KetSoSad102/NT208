@@ -29,10 +29,16 @@ python apps/api-python/scripts/seed.py || {
 }
 
 # Start FastAPI server
-echo_step "Starting FastAPI server on port ${API_PORT:-3000}..."
-cd /app/apps/api-python
-exec uvicorn app.main:app \
-    --host 0.0.0.0 \
-    --port "${API_PORT:-3000}" \
-    --workers "${UVICORN_WORKERS:-2}" \
-    --log-level "${LOG_LEVEL:-info}"
+if [ $# -gt 0 ]; then
+    echo_step "Executing custom command: $*"
+    cd /app/apps/api-python
+    exec "$@"
+else
+    echo_step "Starting FastAPI server on port ${API_PORT:-3000}..."
+    cd /app/apps/api-python
+    exec uvicorn app.main:app \
+        --host 0.0.0.0 \
+        --port "${API_PORT:-3000}" \
+        --workers "${UVICORN_WORKERS:-2}" \
+        --log-level "${LOG_LEVEL:-info}"
+fi

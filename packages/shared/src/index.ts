@@ -18,6 +18,8 @@ export type ImportJobStatusType = (typeof ImportJobStatus)[keyof typeof ImportJo
 export interface JwtUser {
   userId: string;
   role: Role;
+  username?: string;
+  fullName?: string;
   advisorId?: string;
 }
 

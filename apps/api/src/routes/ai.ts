@@ -965,7 +965,16 @@ aiRouter.get('/anomalies/briefs', async (req: AuthRequest, res) => {
 });
 
 aiRouter.get('/anomalies/patterns', async (req: AuthRequest, res) => {
+  const { classId } = req.query;
   const scope = scopedClassFilter(req, 'c');
+  const params = [...scope.params];
+  const where = [scope.sql];
+
+  if (typeof classId === 'string' && classId) {
+    params.push(classId);
+    where.push(`c.id = $${params.length}`);
+  }
+
   const rs = await pool.query<{
     courseCode: string;
     courseName: string;
@@ -976,18 +985,20 @@ aiRouter.get('/anomalies/patterns', async (req: AuthRequest, res) => {
       SELECT
         cr.course_code AS "courseCode",
         cr.course_name AS "courseName",
-        SUM(CASE WHEN e.passed = false THEN 1 ELSE 0 END)::text AS "failCount",
-        COUNT(*)::text AS "totalCount"
+        COUNT(e.id) FILTER (WHERE e.passed = false)::text AS "failCount",
+        COUNT(e.id)::text AS "totalCount"
       FROM enrollments e
+      JOIN students s ON s.id = e.student_id
+      JOIN classes c ON c.id = s.class_id
       JOIN course_offerings co ON co.id = e.course_offering_id
-      JOIN classes c ON c.id = co.class_id
       JOIN courses cr ON cr.id = co.course_id
-      WHERE ${scope.sql}
+      WHERE ${where.join(' AND ')}
       GROUP BY cr.course_code, cr.course_name
-      ORDER BY SUM(CASE WHEN e.passed = false THEN 1 ELSE 0 END) DESC
-      LIMIT 6
+      HAVING COUNT(e.id) FILTER (WHERE e.passed = false) > 0
+      ORDER BY COUNT(e.id) FILTER (WHERE e.passed = false) DESC
+      LIMIT 10
     `,
-    scope.params,
+    params,
   );
 
   res.json(
@@ -1002,7 +1013,7 @@ aiRouter.get('/anomalies/patterns', async (req: AuthRequest, res) => {
         consequentName: null,
         supportCount: fail,
         confidence,
-        message: `${r.courseName} có tỉ lệ không đạt ${confidence}% (${fail}/${total})`,
+        message: `${r.courseName} có số lượng sinh viên rớt: ${fail} sinh viên (tỉ lệ ${confidence}%)`,
       };
     }),
   );
