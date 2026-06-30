@@ -4,7 +4,6 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiFetch, clearToken, setToken } from './api/client';
 
 const DEFAULT_ROUTE = import.meta.env.VITE_DEFAULT_ROUTE || '';
-const CVHT_WEB_URL = import.meta.env.VITE_CVHT_WEB_URL || '/dashboard';
 
 type ClassItem = { id: string; class_code: string; class_name: string };
 type Student = {
@@ -383,6 +382,42 @@ function formatScore(value: unknown, digits = 2, fallback = '--'): string {
   if (!Number.isFinite(n)) return fallback;
   return n.toFixed(digits);
 }
+
+async function copyText(value: string): Promise<boolean> {
+  if (!value) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // Fallback below.
+  }
+
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return copied;
+  } catch {
+    return false;
+  }
+}
+
+const riskBandLabels: Record<string, string> = {
+  all: 'Tất cả',
+  low: 'Thấp',
+  medium: 'Trung bình',
+  high: 'Cao',
+  critical: 'Nguy cấp',
+  graduated: 'Đã tốt nghiệp',
+};
 
 function currentRole(): string | null {
   const rawToken = localStorage.getItem('cvht_token');
@@ -910,7 +945,6 @@ function DAAEntryPage() {
 function LoginPage() {
   const navigate = useNavigate();
   const isDaaOnly = DEFAULT_ROUTE === '/daa-demo';
-  const isDaaEntry = DEFAULT_ROUTE === '/daa-demo' || DEFAULT_ROUTE === '/dashboard/daa-sync';
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -921,53 +955,76 @@ function LoginPage() {
 
   return (
     <div className="auth-shell">
-      <div className="auth-card">
-        <div className="eyebrow">{isDaaOnly ? 'DAA External System' : 'CVHT AI Suite'}</div>
-        <h1>{isDaaOnly ? 'Đăng nhập DAA Demo' : 'Đăng nhập CVHT'}</h1>
-        <p className="auth-copy">
-          {isDaaOnly
-            ? 'Cổng quản lý điểm dành cho Giảng viên. Đăng nhập để cập nhật điểm và quản lý học phần.'
-            : 'Đăng nhập để truy vấn dữ liệu bằng tiếng Việt, nhận bản tin bất thường tự động và theo dõi rủi ro học vụ.'}
-        </p>
-        <div className="auth-grid">
-          <label>
-            <span>Tai khoan</span>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Tên đăng nhập" />
-          </label>
-          <label>
-            <span>Mật khẩu</span>
-            <input
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Mật khẩu"
-              type="password"
-            />
-          </label>
-        </div>
-        {error ? <p className="error-text">{error}</p> : null}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
-          <button
-            className="primary-button"
-            onClick={async () => {
-              try {
-                setError('');
-                const data = await apiFetch<{ accessToken: string }>('/auth/login', {
-                  method: 'POST',
-                  body: JSON.stringify({ username, password }),
-                });
-                setToken(data.accessToken);
-                navigate(DEFAULT_ROUTE || '/dashboard');
-              } catch (err) {
-                setError(err instanceof Error ? err.message : 'Đăng nhập thất bại');
-              }
-            }}
-          >
-            Đăng nhập hệ thống
-          </button>
-          <Link to="/register" className="ghost-button">
-            Đăng ký cố vấn mới
-          </Link>
-        </div>
+      <div className="auth-card auth-card-portal">
+        <section className="auth-portal-copy">
+          <div className="eyebrow">{isDaaOnly ? 'DAA External System' : 'CVHT AI Suite'}</div>
+          <h1>{isDaaOnly ? 'Đăng nhập DAA Demo' : 'Đăng nhập CVHT'}</h1>
+          <p className="auth-copy">
+            {isDaaOnly
+              ? 'Cổng quản lý điểm dành cho giảng viên. Đăng nhập để cập nhật điểm và quản lý học phần.'
+              : 'Cổng hỗ trợ cố vấn học tập với giao diện kiểu portal: thông tin rõ, mục truy cập nhanh và dữ liệu nổi bật.'}
+          </p>
+          <div className="portal-badge-grid">
+            <span>Dashboard trực quan</span>
+            <span>AI Assistant</span>
+            <span>Rủi ro học vụ</span>
+            <span>Thông báo nhanh</span>
+          </div>
+          <div className="portal-notice-card">
+            <div>
+              <span>Demo nhanh</span>
+              <strong>Tài khoản mẫu đã sẵn sàng</strong>
+            </div>
+            <p>Không cần tạo mới. Dùng tài khoản mẫu để vào thẳng hệ thống và test các màn chính.</p>
+          </div>
+          <div className="portal-quick-links">
+            <a href="#login-form">Đăng nhập</a>
+            <Link to="/register">Đăng ký cố vấn</Link>
+            <Link to={isDaaOnly ? '/daa-demo' : '/dashboard'}>Xem giao diện</Link>
+          </div>
+        </section>
+
+        <section className="auth-portal-form" id="login-form">
+          <div className="auth-grid">
+            <label>
+              <span>Tai khoan</span>
+              <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Tên đăng nhập" />
+            </label>
+            <label>
+              <span>Mật khẩu</span>
+              <input
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Mật khẩu"
+                type="password"
+              />
+            </label>
+          </div>
+          {error ? <p className="error-text">{error}</p> : null}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+            <button
+              className="primary-button"
+              onClick={async () => {
+                try {
+                  setError('');
+                  const data = await apiFetch<{ accessToken: string }>('/auth/login', {
+                    method: 'POST',
+                    body: JSON.stringify({ username, password }),
+                  });
+                  setToken(data.accessToken);
+                  navigate(DEFAULT_ROUTE || '/dashboard');
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Đăng nhập thất bại');
+                }
+              }}
+            >
+              Đăng nhập hệ thống
+            </button>
+            <Link to="/register" className="ghost-button">
+              Đăng ký cố vấn mới
+            </Link>
+          </div>
+        </section>
       </div>
     </div>
   );
@@ -1714,7 +1771,6 @@ function GradeDetailPanel({ grades }: { grades?: StudentGradesResponse }) {
 function DashboardPage() {
   const hasToken = Boolean(localStorage.getItem('cvht_token'));
   const navigate = useNavigate();
-  const role = currentRole();
   const location = useLocation();
 
   const [selectedClassId, setSelectedClassId] = useState('');
@@ -1723,6 +1779,9 @@ function DashboardPage() {
   const [selectedGpaMssvs, setSelectedGpaMssvs] = useState<string[]>([]);
   const [gpaSelectionReady, setGpaSelectionReady] = useState(false);
   const [gpaCandidate, setGpaCandidate] = useState('');
+  const [classSearch, setClassSearch] = useState('');
+  const [studentSearch, setStudentSearch] = useState('');
+  const [riskFilter, setRiskFilter] = useState<'all' | 'graduated' | 'low' | 'medium' | 'high' | 'critical'>('all');
 
   const classes = useQuery({
     queryKey: ['classes'],
@@ -1797,6 +1856,38 @@ function DashboardPage() {
     }
   }, [students.data, selectedMssv]);
 
+  const filteredClasses = useMemo(() => {
+    const term = classSearch.trim().toLowerCase();
+    if (!term) return classes.data ?? [];
+    return (classes.data ?? []).filter((item) =>
+      [item.class_code, item.class_name].some((field) => field.toLowerCase().includes(term)),
+    );
+  }, [classes.data, classSearch]);
+
+  const filteredStudents = useMemo(() => {
+    const term = studentSearch.trim().toLowerCase();
+    const studentsData = students.data ?? [];
+    return studentsData.filter((student) => {
+      const risk = riskStudents.data?.find((item) => item.mssv === student.mssv);
+      const band = student.academic_status === 'graduated' ? 'graduated' : risk?.riskBand || 'low';
+      const matchesSearch =
+        !term ||
+        student.full_name.toLowerCase().includes(term) ||
+        student.mssv.toLowerCase().includes(term) ||
+        student.class_code.toLowerCase().includes(term);
+      const matchesRisk = riskFilter === 'all' || band === riskFilter;
+      return matchesSearch && matchesRisk;
+    });
+  }, [students.data, riskStudents.data, studentSearch, riskFilter]);
+
+  useEffect(() => {
+    if (!filteredStudents.length) return;
+    const stillVisible = filteredStudents.some((student) => student.mssv === selectedMssv);
+    if (!selectedMssv || !stillVisible) {
+      setSelectedMssv(filteredStudents[0].mssv);
+    }
+  }, [filteredStudents, selectedMssv]);
+
   const activeClassName = classes.data?.find((item) => item.id === selectedClassId)?.class_name;
   const pageError =
     (classes.error instanceof Error && classes.error.message) ||
@@ -1814,7 +1905,7 @@ function DashboardPage() {
 
   useEffect(() => {
     if (gpaSelectionReady || !gpaLines.data?.students.length) return;
-    setSelectedGpaMssvs(gpaLines.data.students.map((student) => student.mssv));
+    setSelectedGpaMssvs(gpaLines.data.students.slice(0, 5).map((student) => student.mssv));
     setGpaSelectionReady(true);
   }, [gpaLines.data, gpaSelectionReady]);
 
@@ -1822,10 +1913,17 @@ function DashboardPage() {
     (student) => !selectedGpaMssvs.includes(student.mssv),
   );
 
+  const classInsights = [
+    { label: 'Sinh viên', value: students.data?.length ?? 0 },
+    { label: 'Đang hiển thị', value: filteredStudents.length },
+    { label: 'Risk cao', value: riskStudents.data?.filter((item) => item.riskBand === 'high' || item.riskBand === 'critical').length ?? 0 },
+    { label: 'Cần can thiệp', value: overview.data?.kpis.critical ?? 0 },
+  ];
+
   return (
     <div className="dashboard-shell">
       <div className="page-header">
-        <div>
+        <div className="page-header-copy">
           <div className="eyebrow">Hệ thống hỗ trợ cố vấn học tập</div>
           <h1>{isClassesView ? 'Quản lý lớp học & Predictive Analytics' : 'Tổng quan hiệu quả học tập'}</h1>
           <p className="muted">
@@ -1833,6 +1931,34 @@ function DashboardPage() {
               ? 'Phân tích xu hướng điểm số và theo dõi rủi ro sinh viên theo từng lớp.' 
               : 'Thống kê tổng hợp, bản tin AI và danh sách sinh viên cần can thiệp ưu tiên.'}
           </p>
+          <div className="hero-highlights">
+            <span>AI Brief</span>
+            <span>Risk Matrix</span>
+            <span>Student Drill-down</span>
+          </div>
+        </div>
+        <div className="page-header-rail">
+          {isClassesView ? (
+            <div className="page-header-stats">
+              {classInsights.map((item) => (
+                <div className="header-stat" key={item.label}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="header-spotlight">
+              <div className="header-stat accent">
+                <span>Điểm rủi ro cao</span>
+                <strong>{overview.data?.kpis.highRisk ?? '--'}</strong>
+              </div>
+              <div className="header-stat warm">
+                <span>Cần can thiệp</span>
+                <strong>{overview.data?.kpis.critical ?? '--'}</strong>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1935,7 +2061,7 @@ function DashboardPage() {
         <>
           <div className="page-section-header" style={{ marginBottom: '24px' }}>
             <div className="eyebrow">Predictive Analytics</div>
-            <h2 style={{ fontFamily: 'var(--title-font)', fontSize: '2rem', textTransform: 'uppercase', margin: '4px 0' }}>Ma trận điểm sinh viên theo học kỳ</h2>
+            <h2 style={{ fontFamily: 'var(--title-font)', fontSize: '2rem', margin: '4px 0' }}>Ma trận điểm sinh viên theo học kỳ</h2>
             <p className="muted">Phân tích xu hướng điểm số và dự báo kết quả học tập của từng sinh viên trong lớp.</p>
           </div>
 
@@ -1951,8 +2077,14 @@ function DashboardPage() {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <span className="metric-label" style={{ fontSize: '0.85rem' }}>Chọn lớp học để phân tích:</span>
+              <input
+                className="class-search-input"
+                value={classSearch}
+                onChange={(event) => setClassSearch(event.target.value)}
+                placeholder="Tìm lớp theo mã hoặc tên"
+              />
               <div className="class-switcher" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {classes.data?.map((classItem) => (
+                {filteredClasses.map((classItem) => (
                   <button
                     key={classItem.id}
                     className={classItem.id === selectedClassId ? 'chip active' : 'chip'}
@@ -1980,7 +2112,7 @@ function DashboardPage() {
             <div className="gpa-line-controls">
               <div>
                 <span className="metric-label">Sinh viên đang hiển thị</span>
-                <p className="muted">Mặc định chọn ngẫu nhiên 5 sinh viên trong lớp. Có thể bỏ bớt hoặc thêm MSSV theo ý muốn.</p>
+                <p className="muted">Mặc định chọn 5 sinh viên đầu tiên trong lớp. Có thể bỏ bớt hoặc thêm MSSV theo ý muốn.</p>
               </div>
               <div className="gpa-add-control">
                 <select value={gpaCandidate} onChange={(event) => setGpaCandidate(event.target.value)}>
@@ -2001,8 +2133,20 @@ function DashboardPage() {
                     setGpaCandidate('');
                     setGpaSelectionReady(true);
                   }}
-                >
+                  >
                   Thêm
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={!gpaLines.data?.students.length}
+                  onClick={() => {
+                    if (!gpaLines.data?.students.length) return;
+                    setSelectedGpaMssvs(gpaLines.data.students.slice(0, 5).map((student) => student.mssv));
+                    setGpaSelectionReady(true);
+                  }}
+                >
+                  Reset 5 sinh viên
                 </button>
               </div>
             </div>
@@ -2024,8 +2168,27 @@ function DashboardPage() {
                 </div>
                 <span className="section-meta">{activeClassName || 'Danh sách sinh viên và điểm rủi ro'}</span>
               </div>
+              <div className="student-filter-bar">
+                <input
+                  value={studentSearch}
+                  onChange={(event) => setStudentSearch(event.target.value)}
+                  placeholder="Tìm sinh viên theo tên, MSSV hoặc lớp"
+                />
+                <div className="chip-row">
+                  {(['all', 'graduated', 'low', 'medium', 'high', 'critical'] as const).map((band) => (
+                    <button
+                      key={band}
+                      type="button"
+                      className={riskFilter === band ? 'chip active' : 'chip'}
+                      onClick={() => setRiskFilter(band)}
+                    >
+                      {riskBandLabels[band]}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="student-stack">
-                {students.data?.map((student) => {
+                {filteredStudents.map((student) => {
                   const risk = riskStudents.data?.find((item) => item.mssv === student.mssv);
                   return (
                     <button
@@ -2054,6 +2217,7 @@ function DashboardPage() {
                     </button>
                   );
                 })}
+                {!filteredStudents.length ? <p className="muted">Không tìm thấy sinh viên phù hợp với bộ lọc hiện tại.</p> : null}
               </div>
             </div>
 
@@ -2151,13 +2315,21 @@ function DashboardPage() {
 
 
 function AIAssistantPage() {
-  const hasToken = Boolean(localStorage.getItem('cvht_token'));
   const navigate = useNavigate();
   const [chatPrompt, setChatPrompt] = useState('');
   const [sessions, setSessions] = useState<ChatSession[]>(() => loadChatSessions());
   const [currentSessionId, setCurrentSessionId] = useState<string>('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const quickPrompts = useMemo(
+    () => [
+      'Top 10 sinh viên rủi ro cao của lớp đang chọn là ai?',
+      'Phân tích xu hướng GPA của lớp và nêu sinh viên cần can thiệp.',
+      'Môn học nào có tỷ lệ rớt cao nhất trong dữ liệu hiện tại?',
+      'Soạn cho tôi một kế hoạch liên hệ sinh viên có nguy cơ trễ tiến độ.',
+    ],
+    [],
+  );
 
   const chatMutation = useMutation({
     mutationFn: (message: string) =>
@@ -2251,22 +2423,22 @@ function AIAssistantPage() {
 
   const pageError = chatMutation.error instanceof Error && chatMutation.error.message;
 
-  const submitPrompt = () => {
-    const message = chatPrompt.trim();
-    if (!message || chatMutation.isPending) return;
+  const submitMessage = (message: string) => {
+    const trimmed = message.trim();
+    if (!trimmed || chatMutation.isPending) return;
 
     const targetSessionId = ensureCurrentSessionId();
     const now = Date.now();
     appendMessageToSession(targetSessionId, {
       id: `${now}-user`,
       role: 'user',
-      content: message,
+      content: trimmed,
       timestamp: now,
     });
 
     setChatPrompt('');
     chatMutation.reset();
-    chatMutation.mutate(message, {
+    chatMutation.mutate(trimmed, {
       onSuccess: (data) => {
         appendMessageToSession(targetSessionId, {
           id: `${Date.now()}-assistant`,
@@ -2283,7 +2455,7 @@ function AIAssistantPage() {
           content: error instanceof Error ? error.message : 'Không thể xử lý truy vấn này.',
           result: {
             mode: 'assistant',
-            message,
+            message: trimmed,
             answer: error instanceof Error ? error.message : 'Không thể xử lý truy vấn này.',
             sqlPreview: null,
             rows: [],
@@ -2294,6 +2466,12 @@ function AIAssistantPage() {
         });
       },
     });
+  };
+
+  const submitPrompt = () => {
+    const message = chatPrompt.trim();
+    if (!message || chatMutation.isPending) return;
+    submitMessage(message);
   };
 
   const sortedSessions = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -2404,6 +2582,14 @@ function AIAssistantPage() {
               </section>
             ) : null}
 
+            <div className="assistant-suggestion-dock">
+              {quickPrompts.map((prompt) => (
+                <button key={prompt} type="button" onClick={() => submitMessage(prompt)}>
+                  {prompt}
+                </button>
+              ))}
+            </div>
+
             {currentSession?.messages.map((msg) => (
               <div key={msg.id} className={`assistant-message-row ${msg.role}`}>
                 {msg.role === 'user' ? (
@@ -2466,6 +2652,7 @@ function StudentEndpointPage() {
   const { mssv = '', feature: featureParam } = useParams();
   const feature = normalizeStudentFeature(featureParam);
   const [note, setNote] = useState('');
+  const [copyStatus, setCopyStatus] = useState('');
 
   const tabs = useMemo(() => getStudentEndpointTabs(mssv), [mssv]);
 
@@ -2535,6 +2722,12 @@ function StudentEndpointPage() {
     },
   });
 
+  const handleCopyMssv = async () => {
+    const copied = await copyText(mssv);
+    setCopyStatus(copied ? 'Đã sao chép MSSV' : 'Không thể sao chép');
+    window.setTimeout(() => setCopyStatus(''), 1800);
+  };
+
   const pageError =
     (profile.error instanceof Error && profile.error.message) ||
     (overview.error instanceof Error && overview.error.message) ||
@@ -2556,6 +2749,15 @@ function StudentEndpointPage() {
           <p className="muted">
             {profile.data ? `${profile.data.mssv} · ${profile.data.class_code}` : 'Đang tải hồ sơ sinh viên'}
           </p>
+        </div>
+        <div className="page-actions">
+          <button className="ghost-button compact-button" type="button" onClick={handleCopyMssv} disabled={!mssv}>
+            Sao chép MSSV
+          </button>
+          <Link className="primary-button compact-button" to="/dashboard/ai-assistant">
+            Hỏi AI về sinh viên
+          </Link>
+          {copyStatus ? <span className="copy-status">{copyStatus}</span> : null}
         </div>
       </div>
 
@@ -2868,4 +3070,3 @@ export function App() {
     </Routes>
   );
 }
-

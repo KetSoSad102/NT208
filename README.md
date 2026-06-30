@@ -56,11 +56,23 @@ Chay toan bo he thong:
 docker compose up --build
 ```
 
+Neu ban muon chay local qua 1 lenh tu root repo:
+
+```bash
+npm run local:up
+```
+
 Neu truoc do ban da tung chay schema cu, hay reset volume Postgres truoc:
 
 ```bash
 docker compose down -v
 docker compose up --build
+```
+
+Hoac:
+
+```bash
+npm run local:reset
 ```
 
 Neu can bat them Redis:
@@ -73,6 +85,11 @@ Endpoints sau khi chay:
 - API health: http://localhost:3000/health
 - Web: http://localhost:5173
 - DAA demo UI: http://localhost:5174
+
+Tai khoan mau:
+- dean_admin / admin123
+- advisor_1 / advisor123
+- lecturer_demo / lecturer123
 
 Neu can bat AI planner/summarizer bang API key rieng, them vao `.env`:
 
