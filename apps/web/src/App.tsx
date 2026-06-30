@@ -984,10 +984,27 @@ function LoginPage() {
           </div>
         </section>
 
-        <section className="auth-portal-form" id="login-form">
+        <form
+          className="auth-portal-form"
+          id="login-form"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              setError('');
+              const data = await apiFetch<{ accessToken: string }>('/auth/login', {
+                method: 'POST',
+                body: JSON.stringify({ username, password }),
+              });
+              setToken(data.accessToken);
+              navigate(DEFAULT_ROUTE || '/dashboard');
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'Đăng nhập thất bại');
+            }
+          }}
+        >
           <div className="auth-grid">
             <label>
-              <span>Tai khoan</span>
+              <span>Tài khoản</span>
               <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Tên đăng nhập" />
             </label>
             <label>
@@ -1002,29 +1019,14 @@ function LoginPage() {
           </div>
           {error ? <p className="error-text">{error}</p> : null}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
-            <button
-              className="primary-button"
-              onClick={async () => {
-                try {
-                  setError('');
-                  const data = await apiFetch<{ accessToken: string }>('/auth/login', {
-                    method: 'POST',
-                    body: JSON.stringify({ username, password }),
-                  });
-                  setToken(data.accessToken);
-                  navigate(DEFAULT_ROUTE || '/dashboard');
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : 'Đăng nhập thất bại');
-                }
-              }}
-            >
+            <button className="primary-button" type="submit">
               Đăng nhập hệ thống
             </button>
             <Link to="/register" className="ghost-button">
               Đăng ký cố vấn mới
             </Link>
           </div>
-        </section>
+        </form>
       </div>
     </div>
   );
@@ -1179,13 +1181,20 @@ function GpaLineChart({ data, onRemove }: { data?: GpaLineResponse; onRemove: (m
   const height = 420;
   const chartWidth = Math.round(width * zoom);
   const chartHeight = Math.round(height * zoom);
-  const padding = { top: 28, right: 34, bottom: 52, left: 62 };
+  const padding = { top: 32, right: 34, bottom: 52, left: 62 };
   const plotWidth = chartWidth - padding.left - padding.right;
   const plotHeight = chartHeight - padding.top - padding.bottom;
-  const xFor = (index: number) =>
-    padding.left + (data.termCodes.length === 1 ? plotWidth / 2 : (index / (data.termCodes.length - 1)) * plotWidth);
   const yFor = (gpa: number) => padding.top + ((10 - Math.max(0, Math.min(10, gpa))) / 10) * plotHeight;
   const yTicks = [10, 8, 6, 4, 2, 0];
+
+  const numTerms = data.termCodes.length;
+  const numStudents = data.students.length;
+  const termWidth = plotWidth / numTerms;
+  const groupPadding = Math.max(12, termWidth * 0.15); // khoảng cách 2 bên của nhóm cột trong mỗi học kỳ
+  const innerWidth = termWidth - 2 * groupPadding;
+  const barSpacing = Math.max(1, Math.min(4, innerWidth * 0.04)); // khoảng cách giữa các cột trong nhóm
+  const totalSpacing = barSpacing * (numStudents - 1);
+  const barWidth = Math.max(6, (innerWidth - totalSpacing) / numStudents);
 
   return (
     <div className="gpa-line-shell">
@@ -1213,7 +1222,7 @@ function GpaLineChart({ data, onRemove }: { data?: GpaLineResponse; onRemove: (m
           </button>
         </div>
       </div>
-      <div className="gpa-line-plot" role="img" aria-label="Biểu đồ đường GPA theo học kỳ">
+      <div className="gpa-line-plot" role="img" aria-label="Biểu đồ cột GPA ghép nhóm theo học kỳ">
         <svg width={chartWidth} height={chartHeight}>
           {yTicks.map((tick) => {
             const y = yFor(tick);
@@ -1227,51 +1236,69 @@ function GpaLineChart({ data, onRemove }: { data?: GpaLineResponse; onRemove: (m
             );
           })}
           {data.termCodes.map((termCode, index) => {
-            const x = xFor(index);
+            const xCenter = padding.left + index * termWidth + termWidth / 2;
+            const xSeparator = padding.left + index * termWidth;
             return (
               <g key={termCode}>
-                <line x1={x} x2={x} y1={padding.top} y2={chartHeight - padding.bottom} className="gpa-grid-line vertical" />
-                <text x={x} y={chartHeight - 18} textAnchor="middle" className="gpa-axis-label">
+                {index > 0 && (
+                  <line
+                    x1={xSeparator}
+                    x2={xSeparator}
+                    y1={padding.top}
+                    y2={chartHeight - padding.bottom}
+                    className="gpa-grid-line vertical"
+                    style={{ strokeDasharray: '4 4' }}
+                  />
+                )}
+                <text x={xCenter} y={chartHeight - 18} textAnchor="middle" className="gpa-axis-label" style={{ fontWeight: 'bold' }}>
                   {termCode}
                 </text>
               </g>
             );
           })}
-          {data.students.map((student, studentIndex) => {
-            const color = gpaLineColors[studentIndex % gpaLineColors.length];
-            const points = student.series
-              .map((item, index) =>
-                item.gpa == null ? null : { x: xFor(index), y: yFor(item.gpa), gpa: item.gpa, termCode: item.termCode },
-              )
-              .filter((item): item is { x: number; y: number; gpa: number; termCode: string } => item !== null);
-            const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
+          {data.termCodes.map((termCode, termIndex) => {
+            const groupLeft = padding.left + termIndex * termWidth + groupPadding;
+            return data.students.map((student, studentIndex) => {
+              const color = gpaLineColors[studentIndex % gpaLineColors.length];
+              const gpaObj = student.series.find((s) => s.termCode === termCode);
+              const gpa = gpaObj && gpaObj.gpa != null ? gpaObj.gpa : null;
+              if (gpa == null) return null;
 
-            return (
-              <g key={student.mssv}>
-                <path d={path} fill="none" stroke={color} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-                {points.map((point, index) => (
-                  <g key={`${student.mssv}-${index}`}>
-                    <text x={point.x} y={Math.max(14, point.y - 11)} textAnchor="middle" className="gpa-node-label-bg">
-                      {point.gpa.toFixed(1)}
-                    </text>
-                    <text
-                      x={point.x}
-                      y={Math.max(14, point.y - 11)}
-                      textAnchor="middle"
-                      className="gpa-node-label"
-                      style={{ fill: color }}
-                    >
-                      {point.gpa.toFixed(1)}
-                    </text>
-                    <circle cx={point.x} cy={point.y} r="5.5" fill={color}>
-                      <title>
-                        {student.fullName} • {point.termCode} • GPA {point.gpa.toFixed(2)}
-                      </title>
-                    </circle>
-                  </g>
-                ))}
-              </g>
-            );
+              const barHeight = (Math.max(0, Math.min(10, gpa)) / 10) * plotHeight;
+              const y = padding.top + plotHeight - barHeight;
+              const barLeft = groupLeft + studentIndex * (barWidth + barSpacing);
+
+              return (
+                <g key={`${student.mssv}-${termCode}`}>
+                  <rect
+                    x={barLeft}
+                    y={y}
+                    width={barWidth}
+                    height={Math.max(2, barHeight)}
+                    fill={color}
+                    rx={Math.min(4, barWidth / 2.5)}
+                    style={{ transition: 'all 0.3s ease' }}
+                  >
+                    <title>
+                      {student.fullName} • {termCode} • GPA {gpa.toFixed(2)}
+                    </title>
+                  </rect>
+                  {(barWidth > 18 || numStudents <= 3) && (
+                    <g>
+                      <text
+                        x={barLeft + barWidth / 2}
+                        y={y - 6}
+                        textAnchor="middle"
+                        className="gpa-node-label"
+                        style={{ fill: color, fontSize: '10px', fontWeight: 'bold' }}
+                      >
+                        {gpa.toFixed(1)}
+                      </text>
+                    </g>
+                  )}
+                </g>
+              );
+            });
           })}
         </svg>
       </div>
@@ -1406,7 +1433,7 @@ function humanizeChatHeader(key: string): string {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
-function humanizeChatCell(key: string, value: unknown): string {
+function humanizeChatCell(key: string, value: unknown): React.ReactNode {
   if (typeof value === 'number') {
     return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.00$/, '');
   }
@@ -1416,15 +1443,15 @@ function humanizeChatCell(key: string, value: unknown): string {
   if (typeof value === 'string') {
     const normalized = value.toLowerCase();
     if (key === 'risk_band' || key === 'riskBand') {
-      if (normalized === 'critical') return 'Nguy cấp';
-      if (normalized === 'high') return 'Cao';
-      if (normalized === 'medium') return 'Trung bình';
-      if (normalized === 'low') return 'Thấp';
+      if (normalized === 'critical') return <span className="risk-pill critical">Nguy cấp</span>;
+      if (normalized === 'high') return <span className="risk-pill high">Cao</span>;
+      if (normalized === 'medium') return <span className="risk-pill medium">Trung bình</span>;
+      if (normalized === 'low') return <span className="risk-pill low">Thấp</span>;
     }
     if (key === 'academic_status' || key === 'academicStatus') {
-      if (normalized === 'graduated') return 'Đã tốt nghiệp';
-      if (normalized === 'delayed') return 'Chậm tiến độ';
-      if (normalized === 'studying') return 'Đang học';
+      if (normalized === 'graduated') return <span className="status-badge graduated" style={{ background: '#ecfdf5', color: '#047857', padding: '4px 8px', borderRadius: '999px', fontSize: '0.85em', fontWeight: 600 }}>Đã tốt nghiệp</span>;
+      if (normalized === 'delayed') return <span className="status-badge delayed" style={{ background: '#fef2f2', color: '#991b1b', padding: '4px 8px', borderRadius: '999px', fontSize: '0.85em', fontWeight: 600 }}>Chậm tiến độ</span>;
+      if (normalized === 'studying') return <span className="status-badge studying" style={{ background: '#eff6ff', color: '#1d4ed8', padding: '4px 8px', borderRadius: '999px', fontSize: '0.85em', fontWeight: 600 }}>Đang học</span>;
     }
     if (key === 'quadrant') {
       if (normalized === 'credit_low_gpa_low') return 'Tín chỉ thấp - GPA thấp';
@@ -1436,49 +1463,94 @@ function humanizeChatCell(key: string, value: unknown): string {
   return String(value ?? '');
 }
 
-type AnswerBlock =
-  | { type: 'paragraph'; text: string }
-  | { type: 'bullet'; items: string[] };
-
-function parseAnswerBlocks(answer: string): AnswerBlock[] {
-  const lines = answer.replace(/\r\n/g, '\n').split('\n').map((line) => line.trim());
-  const blocks: AnswerBlock[] = [];
-  let paragraphBuffer: string[] = [];
-  let bulletBuffer: string[] = [];
-
-  const flushParagraph = () => {
-    if (!paragraphBuffer.length) return;
-    blocks.push({ type: 'paragraph', text: paragraphBuffer.join(' ') });
-    paragraphBuffer = [];
-  };
-
-  const flushBullet = () => {
-    if (!bulletBuffer.length) return;
-    blocks.push({ type: 'bullet', items: [...bulletBuffer] });
-    bulletBuffer = [];
-  };
-
-  for (const line of lines) {
-    if (!line) {
-      flushParagraph();
-      flushBullet();
-      continue;
+function parseInlineMarkdown(text: string): React.ReactNode[] {
+  let parts: Array<{ type: 'text' | 'bold' | 'code'; content: string }> = [{ type: 'text', content: text }];
+  
+  parts = parts.flatMap(part => {
+    if (part.type !== 'text') return [part];
+    const subParts = part.content.split('**');
+    return subParts.map((sub, idx) => ({
+      type: idx % 2 === 1 ? 'bold' as const : 'text' as const,
+      content: sub
+    }));
+  });
+  
+  parts = parts.flatMap(part => {
+    if (part.type !== 'text') return [part];
+    const subParts = part.content.split('`');
+    return subParts.map((sub, idx) => ({
+      type: idx % 2 === 1 ? 'code' as const : 'text' as const,
+      content: sub
+    }));
+  });
+  
+  return parts.map((part, index) => {
+    if (part.type === 'bold') {
+      return <strong key={index} style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{part.content}</strong>;
     }
-
-    const bulletMatch = line.match(/^(?:[-*•]|\d+[\.)])\s+(.+)$/);
-    if (bulletMatch) {
-      flushParagraph();
-      bulletBuffer.push(bulletMatch[1]);
-      continue;
+    if (part.type === 'code') {
+      return <code key={index} style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', fontFamily: 'monospace', fontSize: '0.9em', color: '#e11d48' }}>{part.content}</code>;
     }
+    return part.content;
+  });
+}
 
-    flushBullet();
-    paragraphBuffer.push(line);
-  }
-
-  flushParagraph();
-  flushBullet();
-  return blocks.length ? blocks : [{ type: 'paragraph', text: answer }];
+function MarkdownText({ text }: { text: string }) {
+  if (!text) return null;
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  return (
+    <>
+      {lines.map((line, i) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          return <div key={i} style={{ height: '8px' }} />;
+        }
+        
+        if (trimmed.startsWith('### ')) {
+          return <h3 key={i} style={{ marginTop: '16px', marginBottom: '8px', fontWeight: 700, fontSize: '1.15rem', color: 'var(--brand-700)' }}>{parseInlineMarkdown(trimmed.substring(4))}</h3>;
+        }
+        if (trimmed.startsWith('## ')) {
+          return <h2 key={i} style={{ marginTop: '20px', marginBottom: '10px', fontWeight: 800, fontSize: '1.3rem', color: 'var(--brand-800)' }}>{parseInlineMarkdown(trimmed.substring(3))}</h2>;
+        }
+        if (trimmed.startsWith('# ')) {
+          return <h1 key={i} style={{ marginTop: '24px', marginBottom: '12px', fontWeight: 800, fontSize: '1.5rem', color: 'var(--brand-900)' }}>{parseInlineMarkdown(trimmed.substring(2))}</h1>;
+        }
+        
+        if (trimmed.startsWith('- ') || trimmed.startsWith('* ') || trimmed.startsWith('• ')) {
+          return (
+            <ul key={i} className="assistant-bullets" style={{ margin: '4px 0 4px 20px', listStyleType: 'disc' }}>
+              <li style={{ paddingLeft: '4px' }}>{parseInlineMarkdown(trimmed.substring(2))}</li>
+            </ul>
+          );
+        }
+        
+        const numMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
+        if (numMatch) {
+          return (
+            <ol key={i} className="assistant-numbered-list" style={{ margin: '4px 0 4px 20px' }}>
+              <li value={parseInt(numMatch[1], 10)} style={{ paddingLeft: '4px' }}>
+                {parseInlineMarkdown(numMatch[2])}
+              </li>
+            </ol>
+          );
+        }
+        
+        if (trimmed.startsWith('> ')) {
+          return (
+            <blockquote key={i} style={{ borderLeft: '3px solid var(--brand-500)', paddingLeft: '12px', margin: '8px 0', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+              {parseInlineMarkdown(trimmed.substring(2))}
+            </blockquote>
+          );
+        }
+        
+        return (
+          <p key={i} style={{ margin: '4px 0', lineHeight: 1.6 }}>
+            {parseInlineMarkdown(line)}
+          </p>
+        );
+      })}
+    </>
+  );
 }
 
 function ChatResultPanel({ result, error, isPending }: { result?: ChatResult; error?: string; isPending?: boolean }) {
@@ -1495,24 +1567,13 @@ function ChatResultPanel({ result, error, isPending }: { result?: ChatResult; er
   }
 
   const keys = result.rows.length > 0 ? Object.keys(result.rows[0]).filter((key) => !hiddenChatColumns.has(key)) : [];
-  const answerBlocks = parseAnswerBlocks(result.answer);
 
   return (
     <div className="chat-result">
       <div className="assistant-answer">
         <div className="eyebrow">Phản hồi AI</div>
         <div className="assistant-answer-content">
-          {answerBlocks.map((block, index) =>
-            block.type === 'paragraph' ? (
-              <p key={index}>{block.text}</p>
-            ) : (
-              <ul key={index} className="assistant-bullets">
-                {block.items.map((item, itemIndex) => (
-                  <li key={itemIndex}>{item}</li>
-                ))}
-              </ul>
-            ),
-          )}
+          <MarkdownText text={result.answer} />
         </div>
       </div>
 
@@ -1772,6 +1833,8 @@ function DashboardPage() {
   const hasToken = Boolean(localStorage.getItem('cvht_token'));
   const navigate = useNavigate();
   const location = useLocation();
+  const role = currentRole();
+  const username = currentUser();
 
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedClassCode, setSelectedClassCode] = useState('');
@@ -1922,43 +1985,21 @@ function DashboardPage() {
 
   return (
     <div className="dashboard-shell">
-      <div className="page-header">
-        <div className="page-header-copy">
-          <div className="eyebrow">Hệ thống hỗ trợ cố vấn học tập</div>
-          <h1>{isClassesView ? 'Quản lý lớp học & Predictive Analytics' : 'Tổng quan hiệu quả học tập'}</h1>
-          <p className="muted">
-            {isClassesView 
-              ? 'Phân tích xu hướng điểm số và theo dõi rủi ro sinh viên theo từng lớp.' 
-              : 'Thống kê tổng hợp, bản tin AI và danh sách sinh viên cần can thiệp ưu tiên.'}
-          </p>
-          <div className="hero-highlights">
-            <span>AI Brief</span>
-            <span>Risk Matrix</span>
-            <span>Student Drill-down</span>
-          </div>
+      <div className="welcome-card-portal">
+        <div className="welcome-avatar-circle">
+          {username ? username.slice(0, 2).toUpperCase() : 'ND'}
         </div>
-        <div className="page-header-rail">
-          {isClassesView ? (
-            <div className="page-header-stats">
-              {classInsights.map((item) => (
-                <div className="header-stat" key={item.label}>
-                  <span>{item.label}</span>
-                  <strong>{item.value}</strong>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="header-spotlight">
-              <div className="header-stat accent">
-                <span>Điểm rủi ro cao</span>
-                <strong>{overview.data?.kpis.highRisk ?? '--'}</strong>
-              </div>
-              <div className="header-stat warm">
-                <span>Cần can thiệp</span>
-                <strong>{overview.data?.kpis.critical ?? '--'}</strong>
-              </div>
-            </div>
-          )}
+        <div className="welcome-card-body">
+          <span className="welcome-card-eyebrow">XIN CHÀO,</span>
+          <h2 className="welcome-card-name">{username || 'Cố vấn học tập'}</h2>
+          <p className="welcome-card-sub">
+            {role === 'DEAN_ADMIN' ? 'Dean Admin' : role === 'ADVISOR' ? 'Cố vấn học tập' : 'Người dùng'} • {isClassesView ? `Lớp quản lý: ${selectedClassCode || 'Demo'}` : 'Hệ thống hỗ trợ CVHT thông minh'}
+          </p>
+        </div>
+        <div className="welcome-card-badges">
+          <span className="welcome-badge status-active">Đang làm việc</span>
+          <span className="welcome-badge year-badge">2026</span>
+          <span className="welcome-badge term-badge">Học kỳ II</span>
         </div>
       </div>
 
@@ -2582,14 +2623,6 @@ function AIAssistantPage() {
               </section>
             ) : null}
 
-            <div className="assistant-suggestion-dock">
-              {quickPrompts.map((prompt) => (
-                <button key={prompt} type="button" onClick={() => submitMessage(prompt)}>
-                  {prompt}
-                </button>
-              ))}
-            </div>
-
             {currentSession?.messages.map((msg) => (
               <div key={msg.id} className={`assistant-message-row ${msg.role}`}>
                 {msg.role === 'user' ? (
@@ -2626,20 +2659,25 @@ function AIAssistantPage() {
                   submitPrompt();
                 }
               }}
-              placeholder="Nhập câu hỏi"
+              placeholder="Hỏi trợ lý CVHT AI (ví dụ: Soạn kế hoạch liên hệ sinh viên có nguy cơ)..."
               rows={1}
             />
-            <div className="composer-meta">
-              <span>CVHT AI</span>
-              <button
-                className="composer-send-button"
-                type="button"
-                disabled={chatMutation.isPending || !chatPrompt.trim()}
-                onClick={submitPrompt}
-              >
-                {chatMutation.isPending ? '...' : 'Gửi'}
-              </button>
-            </div>
+            <button
+              className="composer-send-button"
+              type="button"
+              disabled={chatMutation.isPending || !chatPrompt.trim()}
+              onClick={submitPrompt}
+              aria-label="Gửi tin nhắn"
+            >
+              {chatMutation.isPending ? (
+                <span className="composer-loading-spinner" />
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="19" x2="12" y2="5"></line>
+                  <polyline points="5 12 12 5 19 12"></polyline>
+                </svg>
+              )}
+            </button>
           </section>
         </div>
       </div>
@@ -2982,48 +3020,87 @@ function MainLayout() {
     return <Navigate to="/" replace />;
   }
 
-  const navItems = isDaaOnly
-    ? [{ id: 'daa-demo', label: 'Quản lý điểm', path: '/daa-demo', icon: '📝' }]
+  const sections = isDaaOnly
+    ? [
+        {
+          title: 'HỌC VỤ DAA',
+          items: [{ id: 'daa-demo', label: 'Quản lý điểm', path: '/daa-demo', icon: '📝' }],
+        },
+      ]
     : [
-        { id: 'dashboard', label: 'Tổng quan', path: '/dashboard', icon: '📊' },
-        { id: 'classes', label: 'Quản lý lớp', path: '/dashboard/classes', icon: '🏫' },
-        { id: 'daa-sync', label: 'Đồng bộ dữ liệu', path: '/dashboard/daa-sync', icon: '🔄' },
-        { id: 'ai-assistant', label: 'Trợ lý AI', path: '/dashboard/ai-assistant', icon: '🤖' },
+        {
+          title: 'TỔNG QUAN',
+          items: [{ id: 'dashboard', label: 'Trang chủ', path: '/dashboard', icon: '🏠' }],
+        },
+        {
+          title: 'HỌC VỤ',
+          items: [
+            { id: 'classes', label: 'Quản lý lớp', path: '/dashboard/classes', icon: '🏫' },
+            { id: 'daa-sync', label: 'Đồng bộ dữ liệu', path: '/dashboard/daa-sync', icon: '🔄' },
+          ],
+        },
+        {
+          title: 'AI ASSISTANT',
+          items: [{ id: 'ai-assistant', label: 'Trợ lý AI', path: '/dashboard/ai-assistant', icon: '🤖' }],
+        },
       ];
 
   return (
     <div className={`app-shell ${isSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="app-sidebar">
-        <div className="sidebar-header-toggle">
-          <button
-            className="sidebar-collapse-btn"
-            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-            title={isSidebarCollapsed ? 'Mở rộng' : 'Thu nhỏ'}
-          >
-            {isSidebarCollapsed ? '›' : '‹'}
-          </button>
-        </div>
         <div className="sidebar-brand">
-          <div className="eyebrow">{isDaaOnly ? 'DAA External System' : 'CVHT AI Suite'}</div>
-          <div className="brand-user">{username || 'Người dùng'}</div>
-          <div className="brand-role">
-            {isDaaOnly ? 'Lecturer' : role === 'DEAN_ADMIN' ? 'Dean Admin' : role === 'ADVISOR' ? 'Advisor' : 'User'}
+          <div className="brand-logo-container">
+            <span className="brand-logo-icon">🎓</span>
+            {!isSidebarCollapsed && (
+              <span className="brand-logo-text">
+                <strong>CVHT Portal</strong> <span className="brand-logo-sub">AI</span>
+              </span>
+            )}
           </div>
+          {!isSidebarCollapsed && (
+            <div className="brand-user-card">
+              <div className="brand-user-avatar">
+                {username ? username.slice(0, 2).toUpperCase() : 'ND'}
+              </div>
+              <div className="brand-user-details">
+                <div className="brand-user">{username || 'Người dùng'}</div>
+                <div className="brand-role">
+                  {isDaaOnly ? 'Lecturer' : role === 'DEAN_ADMIN' ? 'Dean Admin' : role === 'ADVISOR' ? 'Advisor' : 'User'}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
         <nav className="sidebar-nav">
-          {navItems.map((item) => (
-            <Link
-              key={item.id}
-              to={item.path}
-              className={`nav-item ${location.pathname === item.path ? 'active' : ''}`}
-              title={isSidebarCollapsed ? item.label : ''}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span className="nav-label">{item.label}</span>
-            </Link>
+          {sections.map((section) => (
+            <div key={section.title} className="sidebar-section">
+              {!isSidebarCollapsed && <div className="sidebar-section-title">{section.title}</div>}
+              <div className="sidebar-section-items">
+                {section.items.map((item) => (
+                  <Link
+                    key={item.id}
+                    to={item.path}
+                    className={`nav-item ${location.pathname === item.path ? 'active' : ''}`}
+                    title={isSidebarCollapsed ? item.label : ''}
+                  >
+                    <span className="nav-icon">{item.icon}</span>
+                    <span className="nav-label">{item.label}</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
         <div className="sidebar-footer">
+          <button
+            className="sidebar-collapse-btn-bottom"
+            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            title={isSidebarCollapsed ? 'Mở rộng' : 'Thu nhỏ'}
+            type="button"
+          >
+            <span className="nav-icon">{isSidebarCollapsed ? '›' : '‹'}</span>
+            {!isSidebarCollapsed && <span className="nav-label">Thu gọn</span>}
+          </button>
           <button
             className="ghost-button logout-button"
             onClick={() => {
