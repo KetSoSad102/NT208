@@ -285,3 +285,24 @@ python -m compileall apps/api-python
 - [x] AI/Text-to-SQL guardrails qua whitelisted planner va role-based scope
 
 Chúng em đã biết làm web và hiểu hệ thống web hoạt động như thế nào.
+
+## Bảng phân công công việc và tỉ lệ đóng góp
+
+| STT | Họ và tên | MSSV | Công việc thực hiện | Tỉ lệ |
+|:---:|-----------|:----:|---------------------|:----:|
+| 1 | **Lê Trí Đức** | **24520009** | Phân tích yêu cầu hệ thống | 5% |
+| 2 | **Lê Trí Đức** | **24520009** | Thiết kế cơ sở dữ liệu | 5% |
+| 3 | **Lê Trí Đức** | **24520009** | Thiết kế kiến trúc backend | 5% |
+| 4 | **Lê Trí Đức** | **24520009** | Xây dựng API quản lý người dùng | 10% |
+| 5 | **Lê Trí Đức** | **24520009** | Xây dựng API xử lý nghiệp vụ | 10% |
+| 6 | **Lê Trí Đức** | **24520009** | Tích hợp xác thực và phân quyền | 5% |
+| 7 | **Lê Trí Đức** | **24520009** | Kiểm thử backend và sửa lỗi | 10% |
+| 8 | **Phan Lâm Dũng** | **24520349** | Thiết kế giao diện tổng thể | 10% |
+| 9 | **Phan Lâm Dũng** | **24520349** | Xây dựng giao diện đăng nhập và đăng ký | 5% |
+| 10 | **Phan Lâm Dũng** | **24520349** | Xây dựng giao diện các chức năng chính | 10% |
+| 11 | **Phan Lâm Dũng** | **24520349** | Kết nối frontend với backend thông qua API | 10% |
+| 12 | **Phan Lâm Dũng** | **24520349** | Tối ưu giao diện và trải nghiệm người dùng | 5% |
+| 13 | **Phan Lâm Dũng** | **24520349** | Kiểm thử frontend và sửa lỗi | 5% |
+| 14 | **Phan Lâm Dũng** | **24520349** | Viết báo cáo và hoàn thiện tài liệu | 5% |
+
+| **Tổng cộng** |  |  |  | **100%** |
