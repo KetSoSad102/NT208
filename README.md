@@ -283,3 +283,5 @@ python -m compileall apps/api-python
 - [x] Ingestion tach rieng khoi request/response
 - [x] Ingestion idempotent + retry + job status
 - [x] AI/Text-to-SQL guardrails qua whitelisted planner va role-based scope
+
+Chúng em đã biết làm web và hiểu hệ thống web hoạt động như thế nào.
