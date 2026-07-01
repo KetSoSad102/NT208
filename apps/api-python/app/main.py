@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import base64
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -3701,10 +3702,28 @@ def daa_demo_snapshot(
     x_daa_token: str | None = Header(default=None, alias="X-DAA-Token"),
     cookie: str | None = Header(default=None)
 ) -> dict[str, Any]:
-    # Allow if valid token OR if any cookie is provided (simulating session auth)
-    if not cookie:
+    # Check if a valid base64 cookie is provided
+    is_valid_cookie = False
+    if cookie:
+        cookie_val = None
+        parts = [p.strip() for p in cookie.split(";")]
+        for part in parts:
+            if part.startswith("daa_session="):
+                cookie_val = part.split("=", 1)[1]
+                break
+        if not cookie_val:
+            cookie_val = cookie
+        
+        try:
+            decoded = base64.b64decode(cookie_val).decode("utf-8")
+            if "@nhom1.nt106" in decoded:
+                is_valid_cookie = True
+        except Exception:
+            pass
+
+    if not is_valid_cookie:
         if DAA_DEMO_TOKEN and x_daa_token != DAA_DEMO_TOKEN:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid DAA token")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid DAA token or session cookie")
 
     rows = query(
         """

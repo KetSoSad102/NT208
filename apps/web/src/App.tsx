@@ -604,7 +604,7 @@ function DaaSyncPage() {
               <textarea
                 value={daaCookie}
                 onChange={(e) => setDaaCookie(e.target.value)}
-                placeholder="Nhập cookie từ trình duyệt (e.g. ASP.NET_SessionId=...)"
+                placeholder="Nhập cookie từ trình duyệt (e.g. daa_session=a2V0QG5ob20xLm50MTA2LGVu)"
                 style={{
                   padding: '12px 16px',
                   borderRadius: '10px',
@@ -702,6 +702,14 @@ function DAAEntryPage() {
     localStorage.setItem('daa_cookie', daaCookie);
   }, [daaCookie]);
 
+  const username = currentUser();
+  useEffect(() => {
+    if (username) {
+      const sessionStr = `${username}@nhom1.nt106,en`;
+      document.cookie = `daa_session=${btoa(sessionStr)}; path=/; max-age=86400; samesite=lax`;
+    }
+  }, [username]);
+
   const canUseDaa = hasToken && (role === 'DEAN_ADMIN' || role === 'LECTURER' || role === 'ADVISOR');
 
   const offerings = useQuery({
@@ -791,7 +799,7 @@ function DAAEntryPage() {
               type="text"
               value={daaCookie}
               onChange={(e) => setDaaCookie(e.target.value)}
-              placeholder="Nhập cookie từ trình duyệt (e.g. ASP.NET_SessionId=...)"
+              placeholder="Nhập cookie từ trình duyệt (e.g. daa_session=a2V0QG5ob20xLm50MTA2LGVu)"
               style={{
                 padding: '10px 14px',
                 borderRadius: '10px',
@@ -970,13 +978,7 @@ function LoginPage() {
             <span>Rủi ro học vụ</span>
             <span>Thông báo nhanh</span>
           </div>
-          <div className="portal-notice-card">
-            <div>
-              <span>Demo nhanh</span>
-              <strong>Tài khoản mẫu đã sẵn sàng</strong>
-            </div>
-            <p>Không cần tạo mới. Dùng tài khoản mẫu để vào thẳng hệ thống và test các màn chính.</p>
-          </div>
+
           <div className="portal-quick-links">
             <a href="#login-form">Đăng nhập</a>
             <Link to="/register">Đăng ký cố vấn</Link>
@@ -996,6 +998,10 @@ function LoginPage() {
                 body: JSON.stringify({ username, password }),
               });
               setToken(data.accessToken);
+              if (isDaaOnly) {
+                const sessionStr = `${username}@nhom1.nt106,en`;
+                document.cookie = `daa_session=${btoa(sessionStr)}; path=/; max-age=86400; samesite=lax`;
+              }
               navigate(DEFAULT_ROUTE || '/dashboard');
             } catch (err) {
               setError(err instanceof Error ? err.message : 'Đăng nhập thất bại');

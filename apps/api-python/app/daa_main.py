@@ -8,8 +8,9 @@ from typing import Any
 import bcrypt
 import jwt
 import psycopg2
+import base64
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, status, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from psycopg2.extras import RealDictCursor
@@ -144,7 +145,7 @@ def can_access_offering(user: CurrentUser, offering_id: str) -> bool:
     return False
 
 @app.post("/auth/login")
-def login(payload: LoginPayload) -> dict[str, Any]:
+def login(payload: LoginPayload, response: Response) -> dict[str, Any]:
     user = query_one("SELECT * FROM users WHERE username = %s", (payload.username,))
     if not user or not bcrypt.checkpw(
         payload.password.encode("utf-8"), user["password_hash"].encode("utf-8")
@@ -154,6 +155,19 @@ def login(payload: LoginPayload) -> dict[str, Any]:
             detail="Sai tai khoan hoac mat khau",
         )
     token = sign_token(user)
+    
+    # Generate base64 session cookie
+    session_str = f"{user['username']}@nhom1.nt106,en"
+    encoded_session = base64.b64encode(session_str.encode("utf-8")).decode("utf-8")
+    response.set_cookie(
+        key="daa_session",
+        value=encoded_session,
+        max_age=86400,
+        path="/",
+        httponly=False,
+        samesite="lax"
+    )
+    
     return {"accessToken": token}
 
 @app.get("/health")
@@ -347,10 +361,28 @@ def daa_demo_snapshot(
     x_daa_token: str | None = Header(default=None, alias="X-DAA-Token"),
     cookie: str | None = Header(default=None)
 ) -> dict[str, Any]:
-    # Allow if valid token OR if any cookie is provided (simulating session auth)
-    if not cookie:
+    # Check if a valid base64 cookie is provided
+    is_valid_cookie = False
+    if cookie:
+        cookie_val = None
+        parts = [p.strip() for p in cookie.split(";")]
+        for part in parts:
+            if part.startswith("daa_session="):
+                cookie_val = part.split("=", 1)[1]
+                break
+        if not cookie_val:
+            cookie_val = cookie
+        
+        try:
+            decoded = base64.b64decode(cookie_val).decode("utf-8")
+            if "@nhom1.nt106" in decoded:
+                is_valid_cookie = True
+        except Exception:
+            pass
+
+    if not is_valid_cookie:
         if DAA_DEMO_TOKEN and x_daa_token != DAA_DEMO_TOKEN:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid DAA token")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid DAA token or session cookie")
 
     rows = query(
         """
