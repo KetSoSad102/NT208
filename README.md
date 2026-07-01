@@ -298,3 +298,20 @@ python -m compileall apps/api-python
 - [x] Guardrails cho AI/Text-to-SQL thông qua bộ planner cấu hình sẵn và giới hạn quyền truy cập database theo phân quyền của người dùng đăng nhập.
 
 *Chúng em đã biết làm web và hiểu hệ thống web hoạt động như thế nào.*
+
+
+Để chạy thì thêm các thông số sau vào file `.env`
+```
+NODE_ENV=development
+API_PORT=3000
+DATABASE_URL=postgresql://cvht:cvht@postgres:5432/cvht
+JWT_SECRET=supersecret_supersecret
+JWT_EXPIRES_IN=12h
+WORKER_POLL_SECONDS=10
+INGESTION_CRON=0 1 * * *
+VITE_API_BASE_URL=http://localhost:3000
+LLM_PROVIDER=trollllm
+LLM_API_KEY= ... 
+LLM_BASE_URL=https://chat.trollllm.xyz/v1
+LLM_MODEL=claude-opus-4-6
+```
